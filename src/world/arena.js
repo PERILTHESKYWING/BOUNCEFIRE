@@ -248,6 +248,7 @@ export class Arena {
     });
     const crown = new THREE.Mesh(new THREE.PlaneGeometry(plateW, plateH), plateMat);
     crown.rotation.x = -Math.PI / 2;
+    crown.rotation.z = Math.PI;   // label top points up-screen for the chase camera
     crown.position.y = w.h + 0.26;
     g.add(crown);
 
