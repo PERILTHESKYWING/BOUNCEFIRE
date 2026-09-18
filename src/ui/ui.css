@@ -528,3 +528,8 @@ html, body {
   .banner-item { font-size: 30px; }
   .btn.lg { padding: 16px 26px; font-size: 17px; }
 }
+
+/* Published-artifact host: the page is wrapped in a skeleton that pads :root
+   for safe areas. The game draws edge to edge and handles insets itself. */
+:root { padding: 0 !important; }
+html, body { width: 100%; height: 100%; }

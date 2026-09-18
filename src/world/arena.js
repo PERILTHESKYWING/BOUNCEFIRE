@@ -263,10 +263,10 @@ export class Arena {
 
     // floor decal: visible from directly above, and it never fills the screen
     const halo = new THREE.Mesh(
-      new THREE.PlaneGeometry(w.w * 1.25, w.d * 3.4),
+      new THREE.PlaneGeometry(w.w * 1.08, w.d * 2.6),
       new THREE.MeshBasicMaterial({
         map: glowTexture(this.renderer), color: mod.color,
-        transparent: true, opacity: 0.24, blending: THREE.AdditiveBlending,
+        transparent: true, opacity: 0.18, blending: THREE.AdditiveBlending,
         depthWrite: false, toneMapped: false,
       })
     );

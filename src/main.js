@@ -693,7 +693,7 @@ class Game {
     this.audio.setIntensity(i);
     this.fx.particles.setIntensity(0.8 + clamp(i, 0, 1) * 0.3 + (this.combat.overdriveT > 0 ? 0.25 : 0));
     if (this.bloom) {
-      const target = this.quality.bloomStrength * (this.theme?.bloom ?? 1) * (1 + i * 0.35 + (this.combat.overdriveT > 0 ? 0.3 : 0));
+      const target = this.quality.bloomStrength * (this.theme?.bloom ?? 1) * (1 + i * 0.22 + (this.combat.overdriveT > 0 ? 0.22 : 0));
       this.bloom.strength = damp(this.bloom.strength, target, 3, dt);
     }
   }
