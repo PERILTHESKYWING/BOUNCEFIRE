@@ -109,7 +109,16 @@ export class Combat {
 
     g.audio.enemyDeath(def.threat);
     g.addScrap(def.coins);
-    g.onEnemyKilled(e);
+
+    // A clean run pays, and that is all it does. The streak is scrap and a
+    // small note; it has never made a round stronger in this build, which is
+    // why there is no combo meter on the HUD to watch instead of the fight.
+    if (this.streak > 0 && this.streak % 5 === 0) {
+      g.addScrap(20);
+      g.hud?.toast(`${this.streak} CLEAN`, '#e0a54a');
+    }
+
+    g.onEnemyKilled(e, opts);
   }
 
   /** BURST: one bounded explosion, once per round. */

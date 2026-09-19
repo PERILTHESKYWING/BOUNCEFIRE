@@ -183,7 +183,7 @@ export const ENEMY_TYPES = {
     behaviour: 'slammer',
     contact: 10,
     signal: 0xff2e1f,
-    slam: { range: 8.5, wind: 0.8, radius: 8.0, damage: 22, cooldown: 3.6, knock: 20 },
+    slam: { range: 7.0, wind: 0.8, radius: 6.2, damage: 22, cooldown: 3.6, knock: 20 },
     model: {
       shell: [
         { shape: 'box', args: [2.4, 2.0, 1.9], pos: [0, 2.0, 0] },

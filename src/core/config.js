@@ -98,14 +98,16 @@ export const CONFIG = {
 export const BOSS_DEF = {
   id: 'foundry',
   name: 'THE FOUNDRY',
-  hp: 2600,
-  radius: 4.6,
+  hp: 2100,
+  radius: 3.9,
   phases: [
     { at: 1.00, name: 'SEALED',  signal: 0xffb35c, slamInterval: 6.0, spawnInterval: 11 },
     { at: 0.60, name: 'VENTING', signal: 0xff7a3c, slamInterval: 4.6, spawnInterval: 9 },
     { at: 0.28, name: 'MELTING', signal: 0xe8453c, slamInterval: 3.4, spawnInterval: 7 },
   ],
-  slamRadius: 15,
+  // Sized against a 28-wide arena: big enough that standing still is fatal,
+  // small enough that stepping out of it is always possible.
+  slamRadius: 10.5,
   slamDamage: 20,
   spawnCount: 3,
   // The armour plates must be broken before the core takes full damage, so the
