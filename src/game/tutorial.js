@@ -42,7 +42,7 @@ const STEPS = [
     glyph: 'fire',
     text: (touch) => (touch ? 'Drag on the right to aim and fire' : 'Aim with the mouse, hold to fire'),
     enter(t) {
-      t.spawnTargets([[-7, 38], [7, 38]], 'skitter');
+      t.spawnTargets([[-5, 38], [5, 38]], 'skitter');
     },
     total: 2,
     progress(t) { return t.total - t.remaining(); },
@@ -54,7 +54,7 @@ const STEPS = [
     text: () => 'Bank a shot off a wall — it hits harder and you get the round back',
     enter(t) {
       t.bankKills = 0;
-      t.spawnTargets([[-13, 54], [13, 54]], 'skitter');
+      t.spawnTargets([[-6.6, 54], [6.6, 54]], 'skitter');
     },
     total: 2,
     progress(t) { return t.bankKills; },
@@ -64,7 +64,7 @@ const STEPS = [
     id: 'shield',
     glyph: 'shield',
     text: () => 'That shield stops straight shots. Come at it off a wall',
-    enter(t) { t.spawnTargets([[0, 65]], 'warden'); },
+    enter(t) { t.spawnTargets([[0, 66]], 'warden'); },
     check(t) { return t.remaining() === 0; },
   },
   {
@@ -74,7 +74,7 @@ const STEPS = [
     enter(t, g) {
       t.panelHits = g.bullets.stats.modHits;
       const panel = g.arena.modWalls[0];
-      if (panel) t.marker.show(panel.x, panel.z - 4);
+      if (panel) t.marker.show(panel.x, panel.z - 7);
     },
     check(t, g) { return g.bullets.stats.modHits > t.panelHits; },
     exit(t) { t.marker.hide(); },
@@ -84,7 +84,7 @@ const STEPS = [
     glyph: 'threat',
     text: () => 'Marks on the floor mean that spot is about to hurt',
     enter(t) {
-      t.spawnLive([[-9, 82, 'skitter'], [9, 82, 'skitter'], [0, 88, 'skitter'], [0, 93, 'lancer']]);
+      t.spawnLive([[-6, 82, 'skitter'], [6, 82, 'skitter'], [0, 88, 'skitter'], [0, 93, 'lancer']]);
     },
     check(t) { return t.remaining() === 0; },
   },

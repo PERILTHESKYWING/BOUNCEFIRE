@@ -621,29 +621,33 @@ const GENERATORS = {
   // shoot around before anything is shooting back.
   training(out, p) {
     // Hand-built, one feature per lesson, nothing in the way of anything else.
+    // Every x here is written against halfW so the room survives a change to
+    // the arena width; the first version of this was authored against a
+    // 42-wide arena and put half its walls outside a 24-wide one.
     const { halfW, z0 } = p;
     const Z = (v) => z0 + v;
+    const X = (f) => halfW * f;
 
     // Rails down both sides, set in from the kerb. They are the bank surface
     // for the whole room, and they are always within reach of the middle.
-    W(out, -halfW + 3.4, Z(54), 2.4, 56, 0);
-    W(out,  halfW - 3.4, Z(54), 2.4, 56, 0);
+    W(out, -X(0.75), Z(54), 2.2, 58, 0);
+    W(out,  X(0.75), Z(54), 2.2, 58, 0);
 
     // Lesson 3: a screen in front of each target, so the obvious shot is the
     // one that does not work.
-    W(out, -13, Z(47), 11, 2.2, 0);
-    W(out,  13, Z(47), 11, 2.2, 0);
+    W(out, -X(0.55), Z(47), halfW * 0.66, 2.0, 0);
+    W(out,  X(0.55), Z(47), halfW * 0.66, 2.0, 0);
 
     // Lesson 4: a pocket for the shielded one, open at both flanks.
-    W(out, -8.0, Z(64), 2.2, 10, 0);
-    W(out,  8.0, Z(64), 2.2, 10, 0);
+    W(out, -X(0.46), Z(66), 2.0, 9, 0);
+    W(out,  X(0.46), Z(66), 2.0, 9, 0);
 
     // Lesson 5: the panel, square on and unmissable.
-    SLOT(out, 0, Z(73), 10, 2.4, 0);
+    SLOT(out, 0, Z(75), halfW * 0.7, 2.2, 0);
 
     // Lesson 6: two posts to work around in the live fight.
-    W(out, -7.5, Z(86), 3.6, 3.6, 0.6);
-    W(out,  7.5, Z(86), 3.6, 3.6, -0.6);
+    W(out, -X(0.42), Z(86), 3.2, 3.2, 0.6);
+    W(out,  X(0.42), Z(86), 3.2, 3.2, -0.6);
 
     SP(out, 0, Z(50));
   },
