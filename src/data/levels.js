@@ -1,112 +1,76 @@
-// Levels are authored as a vertical sequence of hand-tuned chambers. The arena
-// builder turns each chamber spec into geometry, colliders, spawn points and
-// modifier-wall slots, so pacing stays readable while the data stays small.
+// Levels are a sequence of rooms. You walk in, the room wakes up, you clear
+// it, you walk on. There is no auto-advance and no timer: the player decides
+// when the next fight starts.
+//
+// Rooms are authored wide and mostly empty, with the bounce surfaces pushed
+// out to the edges and the angles. The old maze filled the middle of every
+// chamber with cover, which hid the player from their own camera and turned
+// fights into corridor work. A room here has one job: give you room to move
+// and good walls to bank shots off.
 //
 // chamber.type:
-//   gate     narrow entry with two side openings
-//   split    central island, left/right branch routes
-//   chevron  angled V walls, built for long ricochets
-//   pillars  loose pillar field, many short bounces
-//   ring     ring of angled segments around a centre pocket
-//   open     wide arena breather
-//   weave    offset staggered walls forming an S route
-//   boss     wide open boss arena
+//   court    wide rectangle, angled kickers in all four corners
+//   spine    a broken centre wall making two lanes with cross-shots
+//   pockets  four set-back blocks, wide lanes between them
+//   vee      a funnel of two long angles, completely open in the middle
+//   ring     broken ring set far out, big clear circle in the centre
+//   boss     open arena with pylons at the rim
 //
-// mods: modifier-wall ids placed into that chamber's slots, in order.
+// The enemy roster and modifier list per level are the whole difficulty curve:
+// one new enemy and one new modifier per level, never both in the same room.
 
 export const LEVELS = [
   {
-    id: 'l1', name: 'NEON GRID', theme: 'neon', width: 38, seed: 91021,
-    rise: 2.2, intro: 'Bullets bounce. Bouncing keeps them alive.',
+    id: 'l1', name: 'THE YARDS', theme: 'dusk', width: 24, seed: 91021, rise: 1.4,
+    intro: 'Bank your shots. A bounce pays the round back.',
     chambers: [
-      { type: 'gate',    depth: 24, enemies: { grunt: 3 },               mods: [] },
-      { type: 'chevron', depth: 32, enemies: { grunt: 4, swarmer: 4 },   mods: ['dmg50'] },
-      { type: 'split',   depth: 34, enemies: { grunt: 5, spitter: 1 },   mods: ['x2', 'crit'] },
-      { type: 'pillars', depth: 32, enemies: { swarmer: 8, grunt: 3 },   mods: ['dmg50', 'x2'] },
-      { type: 'weave',   depth: 34, enemies: { grunt: 6, sentinel: 1 },  mods: ['rapid'] },
-      { type: 'ring',    depth: 36, enemies: { grunt: 5, brute: 1, spitter: 2 }, mods: ['x3', 'dmg100'] },
-      { type: 'open',    depth: 30, enemies: { swarmer: 10, grunt: 4, brute: 1 }, mods: ['heal', 'x2'] },
+      { type: 'court',   depth: 40, enemies: { skitter: 4 },               mods: [] },
+      { type: 'vee',     depth: 42, enemies: { skitter: 4, hornet: 2 },    mods: ['power'] },
+      { type: 'pockets', depth: 44, enemies: { skitter: 5, hornet: 2 },    mods: ['power'] },
+      { type: 'ring',    depth: 46, enemies: { skitter: 5, hornet: 3 },    mods: ['power', 'power'] },
     ],
   },
   {
-    id: 'l2', name: 'MAGMA CORE', theme: 'volcanic', width: 40, seed: 55512,
-    rise: 2.6, intro: 'Fire walls set the swarm alight.',
+    id: 'l2', name: 'THE KILN', theme: 'kiln', width: 25, seed: 55512, rise: 1.4,
+    intro: 'Lancers hold the back. Close on them or break the line.',
     chambers: [
-      { type: 'gate',    depth: 24, enemies: { grunt: 4, swarmer: 4 },   mods: ['fire'] },
-      { type: 'pillars', depth: 34, enemies: { grunt: 6, swarmer: 6 },   mods: ['dmg50', 'fire'] },
-      { type: 'chevron', depth: 34, enemies: { spitter: 3, grunt: 5 },   mods: ['x2', 'explosive'] },
-      { type: 'split',   depth: 36, enemies: { brute: 2, swarmer: 8 },   mods: ['dmg100', 'x2'] },
-      { type: 'weave',   depth: 34, enemies: { grunt: 8, sentinel: 2 },  mods: ['rapid', 'fire'] },
-      { type: 'ring',    depth: 38, enemies: { brute: 2, grunt: 6, spitter: 2 }, mods: ['x3', 'explosive'] },
-      { type: 'open',    depth: 34, enemies: { swarmer: 14, brute: 2, sentinel: 2 }, mods: ['heal', 'big'] },
+      { type: 'court',   depth: 40, enemies: { skitter: 4, lancer: 1 },              mods: ['power'] },
+      { type: 'spine',   depth: 44, enemies: { skitter: 4, lancer: 2 },              mods: ['split'] },
+      { type: 'vee',     depth: 44, enemies: { hornet: 4, lancer: 2 },               mods: ['power', 'split'] },
+      { type: 'pockets', depth: 46, enemies: { skitter: 5, hornet: 3, lancer: 2 },   mods: ['split'] },
+      { type: 'ring',    depth: 48, enemies: { skitter: 5, hornet: 3, lancer: 3 },   mods: ['power', 'split'] },
     ],
   },
   {
-    id: 'l3', name: 'PRISM HOLLOW', theme: 'crystal', width: 42, seed: 77431,
-    rise: 2.4, intro: 'Angled facets turn one bullet into a storm.',
+    id: 'l3', name: 'COLD STORAGE', theme: 'frost', width: 26, seed: 77431, rise: 1.2,
+    intro: 'A Warden\'s shield stops anything aimed straight at it.',
     chambers: [
-      { type: 'chevron', depth: 28, enemies: { sentinel: 2, grunt: 4 },  mods: ['x2'] },
-      { type: 'ring',    depth: 34, enemies: { grunt: 6, swarmer: 6 },   mods: ['lightning', 'dmg50'] },
-      { type: 'weave',   depth: 36, enemies: { spitter: 3, sentinel: 3 },mods: ['x3', 'pierce'] },
-      { type: 'pillars', depth: 34, enemies: { swarmer: 12, grunt: 5 },  mods: ['split', 'dmg100'] },
-      { type: 'split',   depth: 36, enemies: { brute: 2, sentinel: 3 },  mods: ['ice', 'x2'] },
-      { type: 'chevron', depth: 36, enemies: { grunt: 8, spitter: 3 },   mods: ['lightning', 'rapid'] },
-      { type: 'open',    depth: 36, enemies: { brute: 3, swarmer: 12, sentinel: 3 }, mods: ['heal', 'x3', 'big'] },
+      { type: 'court',   depth: 42, enemies: { skitter: 4, warden: 1 },              mods: ['power'] },
+      { type: 'vee',     depth: 44, enemies: { warden: 2, lancer: 2 },               mods: ['pierce'] },
+      { type: 'spine',   depth: 46, enemies: { skitter: 5, hornet: 3, warden: 1 },   mods: ['split', 'pierce'] },
+      { type: 'pockets', depth: 46, enemies: { lancer: 3, warden: 2 },               mods: ['power', 'pierce'] },
+      { type: 'ring',    depth: 50, enemies: { skitter: 6, hornet: 3, warden: 2 },  mods: ['power', 'split', 'pierce'] },
     ],
   },
   {
-    id: 'l4', name: 'VOID THRONE', theme: 'void', width: 46, seed: 13337,
-    rise: 2.0, boss: true, intro: 'Something enormous is awake up there.',
+    id: 'l4', name: 'DEEP WORKS', theme: 'deep', width: 26, seed: 13337, rise: 1.2,
+    intro: 'Anvils own the ground they stand on. Fight from outside it.',
     chambers: [
-      { type: 'gate',    depth: 26, enemies: { sentinel: 3, grunt: 4 },  mods: ['dmg100'] },
-      { type: 'weave',   depth: 34, enemies: { brute: 2, swarmer: 10 },  mods: ['x3', 'crit'] },
-      { type: 'ring',    depth: 34, enemies: { spitter: 4, sentinel: 4 },mods: ['lightning', 'explosive'] },
-      { type: 'boss',    depth: 84, enemies: {},                         mods: ['x3', 'dmg100', 'heal', 'big', 'rapid', 'crit'] },
+      { type: 'court',   depth: 44, enemies: { skitter: 4, anvil: 1 },               mods: ['power'] },
+      { type: 'ring',    depth: 46, enemies: { hornet: 4, anvil: 1 },                mods: ['burst'] },
+      { type: 'spine',   depth: 46, enemies: { warden: 2, lancer: 3 },               mods: ['pierce', 'burst'] },
+      { type: 'vee',     depth: 48, enemies: { skitter: 7, anvil: 2 },               mods: ['power', 'burst'] },
+      { type: 'pockets', depth: 50, enemies: { hornet: 4, lancer: 3, warden: 2, anvil: 1 }, mods: ['split', 'pierce', 'burst'] },
     ],
   },
   {
-    id: 'l5', name: 'GLACIER VAULT', theme: 'frozen', width: 42, seed: 24680,
-    rise: 2.5, intro: 'Chilled targets take more punishment.',
+    id: 'l5', name: 'THE FOUNDRY', theme: 'deep', width: 28, seed: 99119, rise: 1.0,
+    boss: true,
+    intro: 'Break its plates before the core will take a hit.',
     chambers: [
-      { type: 'gate',    depth: 26, enemies: { grunt: 6, swarmer: 6 },   mods: ['ice'] },
-      { type: 'pillars', depth: 36, enemies: { sentinel: 4, grunt: 6 },  mods: ['ice', 'dmg100'] },
-      { type: 'chevron', depth: 36, enemies: { brute: 2, spitter: 4 },   mods: ['x3', 'pierce'] },
-      { type: 'weave',   depth: 36, enemies: { swarmer: 16, grunt: 8 },  mods: ['rapid', 'split'] },
-      { type: 'ring',    depth: 38, enemies: { brute: 3, sentinel: 4 },  mods: ['dmg100', 'big'] },
-      { type: 'open',    depth: 38, enemies: { grunt: 12, brute: 3, spitter: 4 }, mods: ['heal', 'x3', 'crit'] },
-    ],
-  },
-  {
-    id: 'l6', name: 'HIVE SPIRE', theme: 'bio', width: 40, seed: 31415,
-    rise: 2.8, intro: 'It keeps growing. Clear it anyway.',
-    chambers: [
-      { type: 'weave',   depth: 30, enemies: { swarmer: 14, grunt: 5 },  mods: ['split'] },
-      { type: 'ring',    depth: 36, enemies: { spitter: 4, sentinel: 4 },mods: ['x3', 'fire'] },
-      { type: 'pillars', depth: 36, enemies: { swarmer: 20, grunt: 8 },  mods: ['explosive', 'rapid'] },
-      { type: 'split',   depth: 38, enemies: { brute: 4, sentinel: 4 },  mods: ['dmg100', 'lightning'] },
-      { type: 'chevron', depth: 38, enemies: { grunt: 12, spitter: 5 },  mods: ['x3', 'big'] },
-      { type: 'open',    depth: 40, enemies: { brute: 4, swarmer: 18, sentinel: 5 }, mods: ['heal', 'x3', 'crit', 'explosive'] },
-    ],
-  },
-  {
-    id: 'l7', name: 'SUNKEN TEMPLE', theme: 'stone', width: 44, seed: 86420,
-    rise: 3.0, intro: 'Old stone. New holes in it.',
-    chambers: [
-      { type: 'gate',    depth: 28, enemies: { grunt: 8, brute: 1 },     mods: ['dmg100'] },
-      { type: 'chevron', depth: 36, enemies: { sentinel: 5, spitter: 4 },mods: ['x3', 'crit'] },
-      { type: 'pillars', depth: 38, enemies: { swarmer: 20, grunt: 10 }, mods: ['rapid', 'split'] },
-      { type: 'ring',    depth: 38, enemies: { brute: 4, sentinel: 5 },  mods: ['lightning', 'big'] },
-      { type: 'weave',   depth: 38, enemies: { grunt: 14, spitter: 5 },  mods: ['explosive', 'pierce'] },
-      { type: 'open',    depth: 42, enemies: { brute: 5, swarmer: 20, sentinel: 6 }, mods: ['heal', 'x3', 'dmg100'] },
-    ],
-  },
-  {
-    id: 'l8', name: 'VOID THRONE II', theme: 'void', width: 48, seed: 99119,
-    rise: 2.0, boss: true, bossHpMult: 2.6, intro: 'It remembers you.',
-    chambers: [
-      { type: 'ring',    depth: 32, enemies: { brute: 3, sentinel: 5 },  mods: ['x3', 'dmg100'] },
-      { type: 'weave',   depth: 36, enemies: { swarmer: 20, spitter: 5 },mods: ['lightning', 'rapid'] },
-      { type: 'boss',    depth: 90, enemies: {},                         mods: ['x3', 'dmg100', 'heal', 'big', 'rapid', 'crit', 'explosive', 'split'] },
+      { type: 'court',   depth: 42, enemies: { skitter: 6, lancer: 2 },              mods: ['power', 'split'] },
+      { type: 'vee',     depth: 46, enemies: { warden: 2, hornet: 4, anvil: 1 },     mods: ['pierce', 'burst'] },
+      { type: 'boss',    depth: 76, enemies: {},                                     mods: ['power', 'split', 'pierce', 'burst'] },
     ],
   },
 ];

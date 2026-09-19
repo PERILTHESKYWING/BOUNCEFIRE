@@ -1,8 +1,8 @@
 # BOUNCEFIRE
 
-A portrait-first 3D mobile arcade shooter. You drag one thumb to move up through a
-branching maze; the gun fires itself. Every bullet ricochets off the walls, and
-bouncing is what keeps bullets alive — so the maze is the weapon, not the obstacle.
+A portrait-first 3D arcade shooter about banking shots off walls. You move with
+one thumb, aim and fire with the other, and the walls are how you hit things
+that a straight line cannot reach.
 
 **Play:** open `index.html` from any static web server.
 
@@ -14,80 +14,87 @@ Nothing to build. Three.js is vendored under `vendor/`, so the game runs offline
 
 ## The core rule
 
-Each bullet carries a hidden "damage life" pool:
+There is one rule, and the whole game is built on it:
 
-- hitting an enemy **drains** it
-- hitting a wall **recharges** it
+> **A bounced round hits harder and pays for itself.**
 
-That number is never shown. It is communicated entirely through the bullet's
-glow size, trail length and colour, so players learn "bouncing keeps my bullets
-alive" by watching rather than by reading a tooltip. Bullets also hard-expire at
-15 seconds and are recycled once they drift out of the fight, which keeps the
-visible swarm dense instead of scattered across cleared corridors.
+- Every wall bounce adds one **charge**, up to **three**.
+- Charge is the only damage multiplier in the game: `×1.0 / ×1.4 / ×1.8 / ×2.2`.
+- A round that has bounced at least once and then connects is **returned to the
+  magazine**. A straight shot, and a miss, each cost one round.
+
+The magazine is six and reloads one round at a time, so the shape of a fight is
+decided by how often you can find an angle instead of a line. Charge is shown on
+the round itself (it brightens and lengthens), on the aim line, and in the sound
+of the bounce — there are no hidden pools.
+
+Nothing else multiplies anything. There are no combos, no crits, no overdrive,
+no elemental damage and no chain effects.
 
 ## Modifier walls
 
-Some wall segments are built into the maze as modifiers. A bullet that hits one
-is transformed: `×2`/`×3 BULLETS`, `+50%`/`+100% DAMAGE`, `RAPID FIRE`, `CRIT`,
-`FIRE`, `ICE`, `BOLT`, `PIERCE`, `SPLIT`, `CHARGE`, `BOOM`, `BIG`. Modifier
-colours stay consistent across every theme so they remain readable as gameplay
-information rather than decoration.
+Four panels, unlocked one level at a time so the first game teaches one idea at
+a time:
+
+| Panel  | Level | Effect                                        |
+| ------ | ----- | --------------------------------------------- |
+| POWER  | 1     | +1 charge (still capped at three)             |
+| SPLIT  | 2     | the round becomes three, once                 |
+| PIERCE | 3     | passes through two enemies                    |
+| BURST  | 4     | one small explosion on the next enemy it hits |
+
+Each panel affects a round **once**, then goes quiet for a few seconds. A round
+can carry at most one shape modifier, so a single shot can never cascade into a
+screen full of projectiles.
+
+## The cast
+
+Five enemies, built from multiple meshes with animated parts so each one reads
+by silhouette before you read its colour. All of them use the same four-beat
+grammar — engage, wind up, act, recover — and every attack paints its area on
+the floor before it lands.
+
+| Enemy  | Threat | Reads as                                              |
+| ------ | ------ | ----------------------------------------------------- |
+| SKITTER | 1     | six legs, closes fast, lunges in a straight line       |
+| HORNET  | 2     | hovers at range, then dives through you               |
+| LANCER  | 3     | tripod, holds its distance, fires a slow aimed bolt    |
+| WARDEN  | 4     | slab of a shield facing you — straight shots deflect   |
+| ANVIL   | 5     | raises both arms and slams a wide ring of the floor    |
+
+The Warden is the rule in enemy form: it always faces you, and it turns away
+anything arriving inside a 50° cone of its front. The only way through is off a
+wall.
+
+THE FOUNDRY, the boss, is a drum behind four quadrant plates. Hits land on the
+plate covering the angle they arrive from; the core only takes a quarter of the
+damage until that plate is broken, so the fight is about moving around it.
+
+## Progression
+
+Four upgrades, none of which multiplies another: **damage**, **magazine**,
+**reload speed**, **vitality**. Crates hold cosmetics only — character skins and
+weapon skins — and duplicates convert to scrap.
 
 ## Layout
 
 ```
 index.html              shell, import map, boot screen
+artifact.html           the same page, flattened for publishing
 src/
-  core/                 config, save, pooling/math helpers, monetization hooks
-  data/                 levels, themes, modifiers, progression tables
+  core/                 config, save + migration, pooling/math, monetization hooks
+  data/                 enemies, levels, themes, modifiers, progression tables
   world/                arena builder, collision grid, shared geometry/textures
-  game/                 player, bullets, enemies, boss, combat & combo
-  fx/                   GPU particles, pooled effects, damage numbers, camera rig
-  audio/                synthesised SFX and the step-sequenced score
+  game/                 player, bullets, enemies, boss, combat, tutorial
+  fx/                   GPU particles, pooled effects, camera rig
+  audio/                synthesised SFX on four buses, and a written score
   ui/                   HUD, screens, components, stylesheet
-vendor/three/           pinned Three.js r169 + the four postprocessing addons
+vendor/three/           pinned Three.js r169 (core only)
 ```
 
-Tuning lives in `src/core/config.js`, `src/data/levels.js`, `src/data/themes.js`
-and `src/data/modifiers.js`. Gameplay code reads those tables and holds no magic
-numbers of its own, so the game can be rebalanced without touching systems.
+## Save data
 
-## Design notes
-
-**Planar combat, 3D presentation.** Bullets, enemies and the player all move in
-the XZ plane, which makes ricochets cheap and predictable to debug. The floor
-still climbs chamber by chamber, so the player is genuinely travelling upward,
-and walls are authored low enough that a ~50° chase camera never loses the maze
-behind them.
-
-**Enemies hold their chamber.** They engage when the player comes close and
-return to post otherwise. Global chasing strung enemies out behind the player
-and turned "clear the level" into backtracking. Stragglers rally to the player
-once only a handful remain, so a level can always be finished.
-
-**No asset pipeline.** Every texture, sound and piece of music is generated at
-runtime — canvas textures for wall labels and floors, WebAudio synthesis for the
-score and every effect.
-
-## Performance
-
-Measured in-browser with a saturated swarm (300 bullets, 56 enemies, combo 180):
-
-| | |
-|---|---|
-| simulation per frame | 0.9 ms median, 2.0 ms p95 |
-| draw calls | ~80 |
-| triangles | ~35k |
-
-Bullets, enemies and particles are pooled; bullet cores, glows and trail ghosts
-are three instanced meshes with matrices written straight into the instance
-buffers. Particles are animated entirely in the vertex shader. Quality
-(`low`/`medium`/`high`) is detected from the device and steps itself down once if
-the frame rate does not hold.
-
-## Monetization
-
-`src/core/monetization.js` is a stub with one call site per placement — rewarded
-revive, rewarded 2× level rewards, rewarded chest, and an interstitial that only
-ever fires between levels. Swapping in a real SDK is a single-file change, and
-nothing in the game is gated behind it.
+Saves are versioned (`bouncefire.save.v2`). A `v1` save is migrated on first
+load: scrap, settings and lifetime stats carry over, and purchases in systems
+that no longer exist (the old upgrade tree, amplifiers, auras) are refunded as
+scrap rather than discarded.

@@ -1,104 +1,65 @@
-// Modifier walls. Each entry is pure data: how it looks on the wall, what it
-// does to a bullet, and how loud the activation reads.
+// Modifier walls.
+//
+// There are four. That is the whole list, and it is short on purpose: the old
+// build had thirteen, which meant a bullet could arrive at an enemy carrying a
+// combination the player had no hope of reading back.
+//
+// Every modifier obeys the same stacking rule as a bounce:
+//
+//   CHARGE CAPS AT 3. Nothing multiplies anything else.
+//
+// POWER adds charge, exactly as a wall bounce does, so there is one number in
+// the game and the player already knows it. The other three change the shape
+// of a shot rather than its size, and each can only apply once per bullet.
 
 export const MOD_KIND = {
-  MULTIPLY: 'multiply',   // spawns extra bullets
-  BUFF: 'buff',           // changes the bullet that touched it
-  GLOBAL: 'global',       // timed player-wide effect
-  RESTORE: 'restore',
+  CHARGE: 'charge',
+  SHAPE: 'shape',
 };
 
 export const MODIFIERS = {
-  x2: {
-    id: 'x2', label: '×2', sub: 'BULLETS', kind: MOD_KIND.MULTIPLY,
-    color: 0x53e6ff, glow: 0x00d0ff, split: 2, spreadDeg: 16,
-    rarity: 'common', cooldown: 0.28, punch: 1.0,
-  },
-  x3: {
-    id: 'x3', label: '×3', sub: 'BULLETS', kind: MOD_KIND.MULTIPLY,
-    color: 0x8affd8, glow: 0x00ffbb, split: 3, spreadDeg: 22,
-    rarity: 'rare', cooldown: 0.42, punch: 1.35,
-  },
-  dmg50: {
-    id: 'dmg50', label: '+50%', sub: 'DAMAGE', kind: MOD_KIND.BUFF,
-    color: 0xffd257, glow: 0xffae00, damageMult: 1.5,
-    rarity: 'common', cooldown: 0.22, punch: 0.85,
-  },
-  dmg100: {
-    id: 'dmg100', label: '+100%', sub: 'DAMAGE', kind: MOD_KIND.BUFF,
-    color: 0xffa23a, glow: 0xff6a00, damageMult: 2.0,
-    rarity: 'rare', cooldown: 0.34, punch: 1.15,
-  },
-  rapid: {
-    id: 'rapid', label: 'RAPID', sub: 'FIRE', kind: MOD_KIND.GLOBAL,
-    color: 0xff7ad9, glow: 0xff2bbd, fireRateMult: 0.42, duration: 6,
-    rarity: 'rare', cooldown: 1.6, punch: 1.3,
-  },
-  crit: {
-    id: 'crit', label: 'CRIT', sub: 'CHANCE', kind: MOD_KIND.BUFF,
-    color: 0xfff27a, glow: 0xffd400, critAdd: 0.4,
-    rarity: 'common', cooldown: 0.3, punch: 1.0,
-  },
-  fire: {
-    id: 'fire', label: 'FIRE', sub: 'BURN', kind: MOD_KIND.BUFF,
-    color: 0xff6b2c, glow: 0xff2e00, element: 'fire', damageMult: 1.15,
-    burnDps: 0.55, burnTime: 3.0,
-    rarity: 'common', cooldown: 0.3, punch: 1.1,
-  },
-  ice: {
-    id: 'ice', label: 'ICE', sub: 'FREEZE', kind: MOD_KIND.BUFF,
-    color: 0x9ae8ff, glow: 0x35c8ff, element: 'ice', damageMult: 1.1,
-    slow: 0.5, slowTime: 2.8, chilledBonus: 1.25,
-    rarity: 'common', cooldown: 0.3, punch: 1.05,
-  },
-  lightning: {
-    id: 'lightning', label: 'BOLT', sub: 'CHAIN', kind: MOD_KIND.BUFF,
-    color: 0xc7a3ff, glow: 0x8b5bff, element: 'lightning', damageMult: 1.1,
-    chainCount: 2, chainRange: 9, chainMult: 0.55,
-    rarity: 'rare', cooldown: 0.34, punch: 1.2,
-  },
-  pierce: {
-    id: 'pierce', label: 'PIERCE', sub: 'THROUGH', kind: MOD_KIND.BUFF,
-    color: 0xe6f0ff, glow: 0xffffff, pierce: true, hitCostMult: 0.45,
-    rarity: 'rare', cooldown: 0.36, punch: 1.05,
+  power: {
+    id: 'power', label: 'POWER', kind: MOD_KIND.CHARGE,
+    glyph: 'chevrons', color: 0xf2a03d,
+    charge: 1,
+    tip: 'Adds a charge, same as a bounce.',
+    cooldown: 0.5,
   },
   split: {
-    id: 'split', label: 'SPLIT', sub: 'ON KILL', kind: MOD_KIND.BUFF,
-    color: 0x7dffb0, glow: 0x00ff88, splitOnKill: 2,
-    rarity: 'rare', cooldown: 0.4, punch: 1.1,
+    id: 'split', label: 'SPLIT', kind: MOD_KIND.SHAPE,
+    glyph: 'fork', color: 0x74b86b,
+    split: 3, spreadDeg: 19,
+    tip: 'One shot becomes three. Once per shot.',
+    cooldown: 0.7,
   },
-  heal: {
-    id: 'heal', label: 'CHARGE', sub: 'RESTORE', kind: MOD_KIND.RESTORE,
-    color: 0x63ffce, glow: 0x00ffc3, restore: 1.0, shield: 1,
-    rarity: 'rare', cooldown: 1.2, punch: 1.2,
+  pierce: {
+    id: 'pierce', label: 'PIERCE', kind: MOD_KIND.SHAPE,
+    glyph: 'arrow', color: 0x5f9fd6,
+    pierce: 2,
+    tip: 'Passes through two enemies.',
+    cooldown: 0.6,
   },
-  explosive: {
-    id: 'explosive', label: 'BOOM', sub: 'EXPLOSIVE', kind: MOD_KIND.BUFF,
-    color: 0xff9b3d, glow: 0xff4d00, explode: true, explodeRadius: 6.2, explodeMult: 0.7,
-    rarity: 'epic', cooldown: 0.5, punch: 1.4,
-  },
-  big: {
-    id: 'big', label: 'BIG', sub: 'BULLET', kind: MOD_KIND.BUFF,
-    color: 0xffe07a, glow: 0xffb300, sizeMult: 1.8, damageMult: 1.7, capacityMult: 1.6,
-    rarity: 'epic', cooldown: 0.55, punch: 1.35,
+  burst: {
+    id: 'burst', label: 'BURST', kind: MOD_KIND.SHAPE,
+    glyph: 'burst', color: 0xe2603c,
+    burstRadius: 5.4, burstScale: 0.6,
+    tip: 'Explodes on the next enemy it hits.',
+    cooldown: 0.8,
   },
 };
 
 export const MOD_IDS = Object.keys(MODIFIERS);
 
-// Amplifiers are the collectible meta-version of modifier walls.
-export const AMPLIFIERS = {
-  overcharge:  { id: 'overcharge',  name: 'Overcharge',  rarity: 'rare',      desc: '+12% bullet damage',        stat: 'damageMult', value: 0.12 },
-  hairtrigger: { id: 'hairtrigger', name: 'Hair Trigger',rarity: 'rare',      desc: '+10% fire rate',            stat: 'fireRateMult', value: 0.10 },
-  ricochet:    { id: 'ricochet',    name: 'Ricochet Core',rarity: 'epic',     desc: '+25% wall recharge',        stat: 'wallRecharge', value: 0.25 },
-  splitcell:   { id: 'splitcell',   name: 'Split Cell',  rarity: 'epic',      desc: '+1 starting bullet',        stat: 'bulletCount', value: 1 },
-  deadeye:     { id: 'deadeye',     name: 'Deadeye',     rarity: 'epic',      desc: '+8% crit chance',           stat: 'critChance', value: 0.08 },
-  singularity: { id: 'singularity', name: 'Singularity', rarity: 'legendary', desc: '+35% damage, +15% capacity', stat: 'combo', value: 0 },
-};
+/**
+ * Which modifier is introduced at which level. The first level teaches the
+ * bounce and nothing else; each later level adds exactly one new wall, so a
+ * modifier is always learned on its own before it is seen in company.
+ */
+export const MOD_UNLOCK_ORDER = ['power', 'split', 'pierce', 'burst'];
 
 export const RARITY = {
-  common:    { name: 'COMMON',    color: '#8fa3bf', weight: 62 },
-  rare:      { name: 'RARE',      color: '#4fc8ff', weight: 26 },
-  epic:      { name: 'EPIC',      color: '#c07bff', weight: 9.5 },
-  legendary: { name: 'LEGENDARY', color: '#ffc13d', weight: 2.5 },
+  common:    { name: 'COMMON',    color: '#9a9488', weight: 58, scrap: 60 },
+  rare:      { name: 'RARE',      color: '#5f9fd6', weight: 27, scrap: 180 },
+  epic:      { name: 'EPIC',      color: '#a97bd6', weight: 11, scrap: 500 },
+  legendary: { name: 'LEGENDARY', color: '#e0a13c', weight: 4,  scrap: 1400 },
 };

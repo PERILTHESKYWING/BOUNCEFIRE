@@ -1,286 +1,437 @@
 import * as THREE from 'three';
 import { CONFIG } from '../core/config.js';
 import { clamp, damp, TAU } from '../core/utils.js';
-import { glowTexture } from '../world/geometry.js';
+import { shadowTexture, modelGeometry } from '../world/geometry.js';
 
 const hit = { nx: 0, nz: 0, depth: 0, collider: null };
+const UP = new THREE.Vector3(0, 1, 0);
+
+// Which world X direction appears on the right of the screen. The camera looks
+// along +Z, so it is -1. Everything that turns screen-space input into world
+// movement goes through this, and nothing else needs to know.
+const SCREEN_RIGHT_X = -1;
 
 /**
- * One-thumb control: drag anywhere on screen and the ship follows the offset.
- * There is no fire button and no aiming stick — the weapon runs itself, so the
- * only decision the player makes is where to be.
+ * The character, and everything that decides where they are and what they
+ * shoot at.
+ *
+ * Movement is conventional and world-aligned: W is up the screen, D is right,
+ * always, whatever the character is facing or aiming at. The camera never
+ * rolls and never rotates, so "up" means one thing for the entire game. There
+ * is no auto-advance — the player is only ever moved by their own input and by
+ * things that hit them.
+ *
+ * Firing is manual. On a mouse the cursor aims and the button fires; on touch
+ * the left thumb moves and the right thumb aims and fires. Both schemes put
+ * the same decision in front of the player every second: this round, at that
+ * wall, or straight at the thing in front of me?
  */
 export class Player {
   constructor(scene, game) {
     this.game = game;
-    this.x = 0; this.y = 0; this.z = 6;
+    this.x = 0; this.y = 0; this.z = 8;
     this.vx = 0; this.vz = 0;
     this.radius = CONFIG.player.radius;
-    this.shield = CONFIG.player.maxShield;
-    this.maxShield = CONFIG.player.maxShield;
+
+    this.maxHp = CONFIG.player.maxHp;
+    this.hp = this.maxHp;
     this.invuln = 0;
-    this.regenT = 0;
     this.dead = false;
+
+    this.maxAmmo = CONFIG.bullets.magazine;
+    this.ammo = this.maxAmmo;
+    this.reloadT = 0;
     this.fireT = 0;
-    this.bank = 0;
-    this.thrust = 0;
-    this.buffs = {};
+
+    this.aim = 0;            // world angle the weapon points at
+    this.facing = 0;         // body yaw, damped toward aim
+    this.stride = 0;         // leg yaw, damped toward movement
+    this.wantFire = false;
+    this.moveX = 0; this.moveZ = 0; this.moveMag = 0;
+    this.recoil = 0;
+    this.flash = 0;
+
     this.stats = {
       damage: CONFIG.bullets.damage,
-      fireRateMult: 1,
-      bulletCount: CONFIG.bullets.count,
-      capacityMult: 1,
-      wallRecharge: 1,
-      critChance: CONFIG.bullets.critChance,
-      damageMult: 1,
-      speedMult: 1,
+      magazine: CONFIG.bullets.magazine,
+      reloadPerShot: CONFIG.bullets.reloadPerShot,
+      maxHp: CONFIG.player.maxHp,
     };
-    this.bulletColor = new THREE.Color(0x8ff2ff);
+    this.bulletColor = new THREE.Color(0xffe9b0);
 
     this.group = new THREE.Group();
     this._buildMesh();
     scene.add(this.group);
+    this.aimLine = new AimLine(scene);
 
-    this.input = { active: false, dx: 0, dz: 0, mag: 0 };
     this._keys = new Set();
-    this._drag = { id: null, sx: 0, sy: 0, cx: 0, cy: 0 };
+    this._movePointer = null;
+    this._aimPointer = null;
+    this._mouse = { x: 0, y: 0, down: false, active: false };
+    this._ray = new THREE.Raycaster();
+    this._plane = new THREE.Plane();
+    this._ndc = new THREE.Vector2();
+    this._pt = new THREE.Vector3();
+    this.sticks = { move: null, aim: null };   // read by the HUD to draw them
   }
+
+  // ------------------------------------------------------------------- build
 
   _buildMesh() {
     const g = this.group;
-    const accent = 0x6ff0ff;
+    this.mat = {
+      suit: new THREE.MeshStandardMaterial({ color: 0xe9e2d0, roughness: 0.7, metalness: 0.05, flatShading: true }),
+      trim: new THREE.MeshStandardMaterial({ color: 0x3fae9a, roughness: 0.55, metalness: 0.15, flatShading: true }),
+      visor: new THREE.MeshBasicMaterial({ color: 0x8ff0e0, toneMapped: true }),
+      metal: new THREE.MeshStandardMaterial({ color: 0x53514c, roughness: 0.5, metalness: 0.4, flatShading: true }),
+      accent: new THREE.MeshStandardMaterial({ color: 0x3fae9a, roughness: 0.5, metalness: 0.2, flatShading: true }),
+    };
 
-    const bodyMat = new THREE.MeshStandardMaterial({
-      color: 0x13203c, roughness: 0.28, metalness: 0.86,
-      emissive: 0x0a2e57, emissiveIntensity: 0.5,
-    });
-    const glowMat = new THREE.MeshBasicMaterial({ color: accent, toneMapped: false });
-
-    const hull = new THREE.Mesh(new THREE.ConeGeometry(1.0, 2.6, 6), bodyMat);
-    hull.rotation.x = Math.PI / 2;
-    hull.position.y = 0.1;
-    g.add(hull);
-
-    const spine = new THREE.Mesh(new THREE.BoxGeometry(0.16, 0.16, 2.0), glowMat);
-    spine.position.set(0, 0.55, -0.1);
-    g.add(spine);
-
+    // Legs turn with movement, the torso turns with aim. Two different jobs,
+    // and separating them is what stops a strafing character looking like a
+    // sliding statue.
+    this.legs = new THREE.Group();
     for (const s of [-1, 1]) {
-      const wing = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.18, 0.75), bodyMat);
-      wing.position.set(s * 1.05, 0.05, -0.55);
-      wing.rotation.y = s * 0.32;
-      wing.rotation.z = s * -0.22;
-      g.add(wing);
-      const tip = new THREE.Mesh(new THREE.BoxGeometry(0.2, 0.22, 0.75), glowMat);
-      tip.position.set(s * 1.72, 0.05, -0.62);
-      tip.rotation.y = s * 0.32;
-      g.add(tip);
+      const leg = new THREE.Mesh(modelGeometry('p:leg', [
+        { shape: 'box', args: [0.4, 0.95, 0.5], pos: [0, 0.48, 0] },
+        { shape: 'box', args: [0.46, 0.22, 0.7], pos: [0, 0.11, 0.08] },
+      ]), this.mat.trim);
+      leg.position.set(s * 0.32, 0, 0);
+      this.legs.add(leg);
+      if (s < 0) this.legL = leg; else this.legR = leg;
     }
+    g.add(this.legs);
 
-    // muzzle glow, pulses with every shot
-    this.muzzle = new THREE.Mesh(new THREE.IcosahedronGeometry(0.45, 0), new THREE.MeshBasicMaterial({
-      color: accent, transparent: true, opacity: 0.85,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-    }));
-    this.muzzle.position.set(0, 0.18, 1.6);
-    g.add(this.muzzle);
+    this.torso = new THREE.Group();
+    this.torso.position.y = 0.95;
+    g.add(this.torso);
 
-    // hover ring on the floor keeps the ship readable against busy geometry
+    const chest = new THREE.Mesh(modelGeometry('p:chest', [
+      { shape: 'box', args: [1.15, 0.95, 0.85], pos: [0, 0.42, 0] },
+      { shape: 'box', args: [1.35, 0.3, 0.7], pos: [0, 0.78, -0.02] },
+    ]), this.mat.suit);
+    this.torso.add(chest);
+    this.chest = chest;
+
+    const pack = new THREE.Mesh(modelGeometry('p:pack', [
+      { shape: 'box', args: [0.85, 0.7, 0.42], pos: [0, 0.5, -0.6] },
+    ]), this.mat.trim);
+    this.torso.add(pack);
+    this.pack = pack;
+
+    const head = new THREE.Mesh(modelGeometry('p:head', [
+      { shape: 'box', args: [0.62, 0.55, 0.62], pos: [0, 1.2, 0] },
+      { shape: 'box', args: [0.7, 0.16, 0.66], pos: [0, 1.46, -0.02] },
+    ]), this.mat.suit);
+    this.torso.add(head);
+    this.head = head;
+
+    const visor = new THREE.Mesh(modelGeometry('p:visor', [
+      { shape: 'box', args: [0.5, 0.2, 0.1], pos: [0, 1.2, 0.3] },
+    ]), this.mat.visor);
+    this.torso.add(visor);
+
+    // The weapon is held out to the right, so the barrel line and the aim line
+    // agree and a bank shot lands where the player drew it.
+    this.arm = new THREE.Group();
+    this.arm.position.set(0.42, 0.45, 0.1);
+    this.torso.add(this.arm);
+
+    const arms = new THREE.Mesh(modelGeometry('p:arms', [
+      { shape: 'box', args: [0.3, 0.3, 0.95], pos: [0, 0, 0.42] },
+      { shape: 'box', args: [0.3, 0.3, 0.8], pos: [-0.62, -0.02, 0.3], rot: [0, 0.5, 0] },
+    ]), this.mat.suit);
+    this.arm.add(arms);
+
+    this.gunBody = new THREE.Mesh(modelGeometry('p:gun', [
+      { shape: 'box', args: [0.26, 0.34, 1.5], pos: [0, 0.02, 1.15] },
+      { shape: 'box', args: [0.22, 0.5, 0.3], pos: [0, -0.24, 0.62] },
+      { shape: 'box', args: [0.18, 0.18, 0.9], pos: [0, 0.22, 1.3] },
+    ]), this.mat.metal);
+    this.arm.add(this.gunBody);
+
+    this.gunAccent = new THREE.Mesh(modelGeometry('p:gunaccent', [
+      { shape: 'box', args: [0.3, 0.16, 0.34], pos: [0, 0.02, 0.75] },
+      { shape: 'box', args: [0.22, 0.22, 0.22], pos: [0, 0.03, 1.94] },
+    ]), this.mat.accent);
+    this.arm.add(this.gunAccent);
+
+    this.muzzleOffset = new THREE.Vector3(0.42, 1.4, 2.1);
+
+    // Contact shadow. This is how the character is kept legible on a busy
+    // floor — a real grounded shape, not a halo pasted over the geometry.
+    this.shadow = new THREE.Mesh(
+      new THREE.PlaneGeometry(2.8, 2.8),
+      new THREE.MeshBasicMaterial({ map: shadowTexture(), transparent: true, depthWrite: false, opacity: 0.6 })
+    );
+    this.shadow.rotation.x = -Math.PI / 2;
+    this.shadow.renderOrder = 1;
+    g.add(this.shadow);
+
+    // A thin painted ring, in the character's own accent. It marks where the
+    // player is standing without lighting up the floor around them.
     this.ring = new THREE.Mesh(
-      new THREE.RingGeometry(1.5, 2.05, 36),
-      new THREE.MeshBasicMaterial({
-        color: accent, transparent: true, opacity: 0.32,
-        blending: THREE.AdditiveBlending, depthWrite: false, side: THREE.DoubleSide,
-      })
+      new THREE.RingGeometry(1.32, 1.5, 32),
+      new THREE.MeshBasicMaterial({ color: 0x3fae9a, transparent: true, opacity: 0.55, depthWrite: false, side: THREE.DoubleSide })
     );
     this.ring.rotation.x = -Math.PI / 2;
-    this.ring.material.depthTest = false;
-    this.ring.renderOrder = 19;
+    this.ring.position.y = 0.06;
+    this.ring.renderOrder = 2;
     g.add(this.ring);
+  }
 
-    this.halo = new THREE.Sprite(new THREE.SpriteMaterial({
-      map: glowTexture(null), color: accent, transparent: true, opacity: 0.3,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-    }));
-    this.halo.scale.setScalar(4.4);
-    this.halo.position.y = 0.4;
-    // drawn last and without depth testing, so the ship is never lost behind a wall
-    this.halo.material.depthTest = false;
-    this.halo.renderOrder = 20;
-    g.add(this.halo);
-
-    this.light = new THREE.PointLight(accent, 7, 22, 2);
-    this.light.position.y = 1.5;
-    g.add(this.light);
-
-    // shield bubble, shown when hit
-    this.bubble = new THREE.Mesh(
-      new THREE.IcosahedronGeometry(2.4, 2),
-      new THREE.MeshBasicMaterial({
-        color: 0x7fd8ff, transparent: true, opacity: 0, wireframe: true,
-        blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-      })
-    );
-    g.add(this.bubble);
+  /** Apply the equipped cosmetics. Colours only — the silhouette never changes. */
+  applySkins(character, weapon) {
+    this.mat.suit.color.setHex(character.suit);
+    this.mat.trim.color.setHex(character.trim);
+    this.mat.visor.color.setHex(character.visor);
+    this.mat.metal.color.setHex(weapon.metal);
+    this.mat.accent.color.setHex(weapon.accent);
+    this.ring.material.color.setHex(character.trim);
+    this.bulletColor.setHex(weapon.tracer);
+    this.aimLine.setColor(character.visor);
   }
 
   // ------------------------------------------------------------------- input
 
   attachInput(el) {
+    this.el = el;
+    const rightHalf = (x) => x > window.innerWidth * 0.42;
+
     const onDown = (e) => {
-      if (this._drag.id !== null) return;
-      const p = pointer(e);
-      this._drag.id = p.id;
-      this._drag.sx = p.x; this._drag.sy = p.y;
-      this._drag.cx = p.x; this._drag.cy = p.y;
-      this.input.active = true;
+      if (this.game.state !== 'playing') return;
+      if (e.pointerType === 'mouse') {
+        this._mouse.down = true;
+        this._mouse.active = true;
+        this._mouse.x = e.clientX; this._mouse.y = e.clientY;
+        return;
+      }
+      // Touch: the side of the screen you press decides which stick you get.
+      if (rightHalf(e.clientX) && this._aimPointer === null) {
+        this._aimPointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY };
+      } else if (!rightHalf(e.clientX) && this._movePointer === null) {
+        this._movePointer = { id: e.pointerId, ox: e.clientX, oy: e.clientY, x: e.clientX, y: e.clientY };
+      }
     };
+
     const onMove = (e) => {
-      if (this._drag.id === null) return;
-      const p = pointer(e, this._drag.id);
-      if (!p) return;
-      this._drag.cx = p.x; this._drag.cy = p.y;
-      const maxR = Math.min(window.innerWidth, window.innerHeight) * 0.16;
-      let dx = p.x - this._drag.sx;
-      let dy = p.y - this._drag.sy;
-      const d = Math.hypot(dx, dy);
-      if (d > maxR) {
-        // re-anchor so the stick never feels stuck at the edge
-        this._drag.sx += (dx / d) * (d - maxR);
-        this._drag.sy += (dy / d) * (d - maxR);
-        dx = (dx / d) * maxR; dy = (dy / d) * maxR;
+      if (e.pointerType === 'mouse') {
+        this._mouse.x = e.clientX; this._mouse.y = e.clientY;
+        this._mouse.active = true;
+        return;
       }
-      const mag = Math.min(1, Math.hypot(dx, dy) / maxR);
-      if (mag > 0.001) {
-        const inv = 1 / Math.hypot(dx, dy);
-        this.input.dx = dx * inv;
-        this.input.dz = -dy * inv;     // screen up is +Z into the maze
+      for (const p of [this._movePointer, this._aimPointer]) {
+        if (p && p.id === e.pointerId) { p.x = e.clientX; p.y = e.clientY; }
       }
-      this.input.mag = mag;
     };
+
     const onUp = (e) => {
-      const p = pointer(e, this._drag.id);
-      if (this._drag.id !== null && p === null && e.type !== 'pointercancel') return;
-      this._drag.id = null;
-      this.input.active = false;
-      this.input.mag = 0;
+      if (e.pointerType === 'mouse') { this._mouse.down = false; return; }
+      if (this._movePointer && this._movePointer.id === e.pointerId) this._movePointer = null;
+      if (this._aimPointer && this._aimPointer.id === e.pointerId) this._aimPointer = null;
     };
+
     el.addEventListener('pointerdown', onDown, { passive: true });
     el.addEventListener('pointermove', onMove, { passive: true });
     el.addEventListener('pointerup', onUp, { passive: true });
     el.addEventListener('pointercancel', onUp, { passive: true });
+    el.addEventListener('contextmenu', (e) => e.preventDefault());
 
-    addEventListener('keydown', (e) => this._keys.add(e.key.toLowerCase()));
+    addEventListener('keydown', (e) => {
+      this._keys.add(e.key.toLowerCase());
+      if (e.code === 'Space') e.preventDefault();
+    });
     addEventListener('keyup', (e) => this._keys.delete(e.key.toLowerCase()));
+    addEventListener('blur', () => { this._keys.clear(); this._mouse.down = false; });
   }
 
-  _keyVector() {
+  releaseInput() {
+    this._movePointer = null;
+    this._aimPointer = null;
+    this._mouse.down = false;
+    this._keys.clear();
+    this.wantFire = false;
+  }
+
+  /**
+   * Movement, in screen terms. W is up the screen, D is right. Always.
+   *
+   * The camera looks down +Z, and a camera looking down +Z has world +X on the
+   * LEFT of the screen — that is just what the handedness gives you. So screen
+   * right is world -X, and every input that means "right" is negated here, in
+   * the one place that translates a player's intent into the world. Reading
+   * `dx += 1` for D and trusting it is exactly how the old build ended up
+   * feeling mirrored.
+   */
+  _readMove() {
     const k = this._keys;
     let dx = 0, dz = 0;
-    if (k.has('a') || k.has('arrowleft')) dx -= 1;
-    if (k.has('d') || k.has('arrowright')) dx += 1;
+    if (k.has('a') || k.has('arrowleft')) dx -= SCREEN_RIGHT_X;
+    if (k.has('d') || k.has('arrowright')) dx += SCREEN_RIGHT_X;
     if (k.has('w') || k.has('arrowup')) dz += 1;
     if (k.has('s') || k.has('arrowdown')) dz -= 1;
-    const d = Math.hypot(dx, dz);
-    return d > 0 ? { dx: dx / d, dz: dz / d, mag: 1 } : null;
+    if (dx || dz) {
+      const d = Math.hypot(dx, dz);
+      return { dx: dx / d, dz: dz / d, mag: 1 };
+    }
+    const p = this._movePointer;
+    if (p) {
+      const maxR = Math.min(window.innerWidth, window.innerHeight) * 0.14;
+      let ox = p.x - p.ox, oy = p.y - p.oy;
+      const d = Math.hypot(ox, oy);
+      if (d > maxR) {
+        // re-anchor so the stick never feels stuck against its own edge
+        p.ox += (ox / d) * (d - maxR);
+        p.oy += (oy / d) * (d - maxR);
+        ox = (ox / d) * maxR; oy = (oy / d) * maxR;
+      }
+      const mag = clamp(Math.hypot(ox, oy) / maxR, 0, 1);
+      if (mag > 0.12) {
+        const inv = 1 / Math.hypot(ox, oy);
+        // screen up is +Z, screen right is -X: the same mapping as the keys
+        return { dx: ox * inv * SCREEN_RIGHT_X, dz: -oy * inv, mag };
+      }
+      return { dx: 0, dz: 0, mag: 0 };
+    }
+    return { dx: 0, dz: 0, mag: 0 };
+  }
+
+  /** Aim and the fire decision, from whichever device is being used. */
+  _readAim(camera) {
+    const p = this._aimPointer;
+    if (p) {
+      const maxR = Math.min(window.innerWidth, window.innerHeight) * 0.14;
+      const ox = p.x - p.ox, oy = p.y - p.oy;
+      const d = Math.hypot(ox, oy);
+      if (d > maxR) { p.ox += (ox / d) * (d - maxR); p.oy += (oy / d) * (d - maxR); }
+      const nx = p.x - p.ox, ny = p.y - p.oy;
+      const nd = Math.hypot(nx, ny);
+      if (nd > maxR * 0.25) this.aim = Math.atan2((nx / nd) * SCREEN_RIGHT_X, -ny / nd);
+      // Holding the aim stick is the fire decision: let go and you stop.
+      this.wantFire = true;
+      this.sticks.aim = { ox: p.ox, oy: p.oy, x: p.x, y: p.y, r: maxR };
+    } else {
+      this.sticks.aim = null;
+      if (this._mouse.active) {
+        this._ndc.set(
+          (this._mouse.x / window.innerWidth) * 2 - 1,
+          -((this._mouse.y / window.innerHeight) * 2 - 1)
+        );
+        this._ray.setFromCamera(this._ndc, camera);
+        this._plane.setFromNormalAndCoplanarPoint(UP, this._pt.set(this.x, this.y + 1.2, this.z));
+        const p2 = this._ray.ray.intersectPlane(this._plane, this._pt);
+        if (p2) {
+          const dx = p2.x - this.x, dz = p2.z - this.z;
+          if (dx * dx + dz * dz > 0.6) this.aim = Math.atan2(dx, dz);
+        }
+      }
+      this.wantFire = this._mouse.down || this._keys.has(' ') || this._keys.has('spacebar');
+    }
+    this.sticks.move = this._movePointer
+      ? { ox: this._movePointer.ox, oy: this._movePointer.oy, x: this._movePointer.x, y: this._movePointer.y, r: Math.min(window.innerWidth, window.innerHeight) * 0.14 }
+      : null;
   }
 
   // ------------------------------------------------------------------ combat
 
-  addTimedBuff(key, value, duration) {
-    const b = this.buffs[key];
-    if (b && b.t > 0) { b.t = Math.max(b.t, duration); b.value = Math.min(b.value, value); }
-    else this.buffs[key] = { value, t: duration };
+  get canFire() { return this.ammo >= 1 && this.fireT <= 0 && !this.dead; }
+
+  /** Called by a round on its first wall bounce. The core rule, paid out. */
+  refundRound() {
+    if (this.ammo >= this.maxAmmo) return;
+    this.ammo = Math.min(this.maxAmmo, this.ammo + 1);
+    this.game.onRefund();
   }
 
-  addShield(n) {
-    if (this.shield >= this.maxShield) return false;
-    this.shield = Math.min(this.maxShield, this.shield + n);
-    this.game.onShieldChange();
-    this.game.audio.pickup();
-    return true;
+  heal(n) {
+    if (this.dead) return 0;
+    const before = this.hp;
+    this.hp = Math.min(this.maxHp, this.hp + n);
+    return this.hp - before;
   }
 
   takeHit(amount, fromX, fromZ) {
-    if (this.invuln > 0 || this.dead) return;
-    this.shield -= amount;
+    if (this.invuln > 0 || this.dead || this.godMode) return;
+    this.hp -= amount;
     this.invuln = CONFIG.player.invulnAfterHit;
-    this.regenT = CONFIG.player.shieldRegenDelay;
+    this.flash = 1;
     const dx = this.x - fromX, dz = this.z - fromZ;
     const d = Math.hypot(dx, dz) || 1;
     this.vx += (dx / d) * CONFIG.player.contactKnockback;
     this.vz += (dz / d) * CONFIG.player.contactKnockback;
-    this.game.onPlayerHit();
-    if (this.shield <= 0) { this.shield = 0; this.dead = true; this.game.onPlayerDead(); }
+    this.game.combat.breakStreak();
+    this.game.onPlayerHit(amount);
+    if (this.hp <= 0) { this.hp = 0; this.dead = true; this.game.onPlayerDead(); }
   }
 
   revive() {
     this.dead = false;
-    this.shield = this.maxShield;
-    this.invuln = 3.0;
-    this.regenT = 0;
+    this.hp = this.maxHp;
+    this.ammo = this.maxAmmo;
+    this.invuln = 2.5;
   }
 
   reset(x, z) {
     this.x = x; this.z = z;
     this.vx = 0; this.vz = 0;
-    this.shield = this.maxShield;
-    this.invuln = 1.2;
-    this.dead = false;
+    this.maxHp = this.stats.maxHp;
+    this.hp = this.maxHp;
+    this.maxAmmo = Math.round(this.stats.magazine);
+    this.ammo = this.maxAmmo;
+    this.reloadT = 0;
     this.fireT = 0;
-    this.buffs = {};
-    this.input.mag = 0;
-  }
-
-  get fireInterval() {
-    let m = this.stats.fireRateMult;
-    const b = this.buffs.fireRate;
-    if (b && b.t > 0) m *= b.value;
-    if (this.game.combat.overdriveT > 0) m *= CONFIG.combo.overdriveFireRate;
-    return CONFIG.bullets.fireInterval * m;
+    this.invuln = 1.0;
+    this.dead = false;
+    this.aim = 0;
+    this.facing = 0;
+    this.releaseInput();
   }
 
   // ------------------------------------------------------------------ update
 
-  update(dt, time) {
+  update(dt, time, camera) {
     const cfg = CONFIG.player;
     const g = this.game;
 
-    for (const k in this.buffs) if (this.buffs[k].t > 0) this.buffs[k].t -= dt;
     if (this.invuln > 0) this.invuln -= dt;
+    if (this.fireT > 0) this.fireT -= dt;
+    this.flash = Math.max(0, this.flash - dt * 3);
 
     if (!this.dead) {
-      // shield regen after a quiet spell
-      if (this.shield < this.maxShield) {
-        this.regenT -= dt;
-        if (this.regenT <= 0) {
-          this.regenT = cfg.shieldRegenTime;
-          this.addShield(1);
-        }
+      const mv = this._readMove();
+      this._readAim(camera);
+      this.moveX = mv.dx; this.moveZ = mv.dz; this.moveMag = mv.mag;
+
+      const speed = cfg.speed;
+      this.vx = damp(this.vx, mv.dx * speed * mv.mag, cfg.accel / 4, dt);
+      this.vz = damp(this.vz, mv.dz * speed * mv.mag, cfg.accel / 4, dt);
+
+      // Passive reload. Slow enough that bouncing is the real supply line.
+      if (this.ammo < this.maxAmmo) {
+        this.reloadT += dt;
+        const per = Math.max(0.2, this.stats.reloadPerShot);
+        if (this.reloadT >= per) { this.reloadT -= per; this.ammo++; g.onReload(); }
+      } else {
+        this.reloadT = 0;
       }
 
-      let dx = 0, dz = 0, mag = 0;
-      const kv = g.attract ? null : this._keyVector();
-      if (kv) { dx = kv.dx; dz = kv.dz; mag = 1; }
-      else if (this.input.mag > 0.02) { dx = this.input.dx; dz = this.input.dz; mag = this.input.mag; }
-      if (g.attract) { dx = this.input.dx; dz = this.input.dz; mag = this.input.mag; }
-
-      const speed = cfg.speed * this.stats.speedMult;
-      const tx = dx * speed * mag;
-      const tz = dz * speed * mag + cfg.autoAdvance;
-      this.vx = damp(this.vx, tx, cfg.accel, dt);
-      this.vz = damp(this.vz, tz, cfg.accel, dt);
-      this.thrust = damp(this.thrust, mag, 8, dt);
+      if (this.wantFire && this.canFire) this._fire();
+      else if (this.wantFire && this.ammo < 1 && this.fireT <= 0) {
+        this.fireT = 0.28;
+        g.audio.dryFire();
+        g.hud?.flashAmmo();
+      }
     } else {
-      this.vx = damp(this.vx, 0, 6, dt);
-      this.vz = damp(this.vz, 0, 6, dt);
-      this.thrust = damp(this.thrust, 0, 6, dt);
+      this.vx = damp(this.vx, 0, 7, dt);
+      this.vz = damp(this.vz, 0, 7, dt);
+      this.moveMag = 0;
+      this.wantFire = false;
     }
 
     this.x += this.vx * dt;
     this.z += this.vz * dt;
 
-    // wall resolution: slide rather than stop dead
+    // Walls: slide along them rather than stopping dead.
     const arena = g.arena;
     for (let i = 0; i < 3; i++) {
       if (!arena.collide(this.x, this.z, this.radius, hit)) break;
@@ -293,91 +444,145 @@ export class Player {
     this.z = clamp(this.z, arena.bounds.minZ + this.radius, arena.bounds.maxZ - this.radius);
 
     const fy = arena.floorAt(this.z);
-    this.y = damp(this.y, fy, 9, dt);
+    this.y = damp(this.y, fy, 10, dt);
 
-    // presentation
+    this._present(dt, time);
+    this.aimLine.update(this, arena, !this.dead && g.state === 'playing');
+  }
+
+  _present(dt, time) {
     const g3 = this.group;
-    g3.position.set(this.x, this.y + cfg.hoverHeight + Math.sin(time * 2.4) * 0.1, this.z);
-    this.bank = damp(this.bank, clamp(-this.vx * 0.045, -0.5, 0.5), 8, dt);
-    g3.rotation.z = this.bank;
-    g3.rotation.x = clamp(-this.vz * 0.006, -0.12, 0.12);
-    this.ring.rotation.z += dt * 1.4;
-    this.ring.position.y = -(cfg.hoverHeight) + 0.08 + Math.sin(time * 3.1) * 0.04;
-    const blink = this.invuln > 0 ? (Math.sin(time * 26) * 0.5 + 0.5) : 1;
-    g3.visible = this.invuln > 0 ? blink > 0.35 : true;
-    this.muzzle.scale.setScalar(damp(this.muzzle.scale.x, 0.7 + this.thrust * 0.2, 12, dt));
-    this.bubble.material.opacity = damp(this.bubble.material.opacity, this.invuln > 0 ? 0.35 : 0, 6, dt);
-    this.bubble.rotation.y += dt * 0.8;
-    this.bubble.rotation.x += dt * 0.5;
+    g3.position.set(this.x, this.y, this.z);
 
-    if (this.thrust > 0.05 && Math.random() < dt * 40 * this.thrust) {
-      g.fx.particles.spawn(
-        this.x + (Math.random() - 0.5) * 1.2, this.y + 1.2, this.z - 1.4,
-        -this.vx * 0.15 + (Math.random() - 0.5) * 2, 0.5, -this.vz * 0.18 - 4,
-        0x6ff0ff, 0.4, 0.35, { gravity: -1, drag: 2.5, stretch: 1.4 }
-      );
+    this.facing = angleDamp(this.facing, this.aim, CONFIG.player.turnRate, dt);
+    this.torso.rotation.y = this.facing;
+
+    if (this.moveMag > 0.05) {
+      this.stride = angleDamp(this.stride, Math.atan2(this.moveX, this.moveZ), 12, dt);
     }
+    this.legs.rotation.y = this.stride;
 
-    if (!this.dead) this._autoFire(dt, time);
+    // A simple two-beat walk. The legs only move when the player does, which
+    // is the cheapest possible way to make movement feel like movement.
+    const gait = time * 9;
+    const amp = this.moveMag * 0.42;
+    this.legL.rotation.x = Math.sin(gait) * amp;
+    this.legR.rotation.x = -Math.sin(gait) * amp;
+    this.legs.position.y = Math.abs(Math.sin(gait)) * amp * 0.22;
+
+    this.recoil = damp(this.recoil, 0, 14, dt);
+    this.arm.position.z = 0.1 - this.recoil * 0.34;
+    this.torso.position.y = 0.95 - this.recoil * 0.05 + Math.sin(time * 1.8) * 0.02;
+
+    // A hit is one short white flash on the suit. Invulnerability is shown on
+    // the floor ring instead of on the body: tinting the character for most of
+    // a second makes the one thing that must always be findable change colour,
+    // and it also makes a clean hit and a spent i-frame look identical.
+    const f = this.flash;
+    this.mat.suit.emissive?.setRGB(f * 0.95, f * 0.92, f * 0.85);
+    this.mat.suit.emissiveIntensity = 1;
+
+    const inv = this.invuln > 0 ? (Math.sin(time * 26) * 0.5 + 0.5) : 0;
+    this.ring.material.opacity = 0.5 + inv * 0.45;
+    this.ring.scale.setScalar(1 + inv * 0.07);
+
+    this.shadow.position.y = 0.04;
+    this.ring.rotation.z += dt * 0.4;
   }
 
-  _autoFire(dt, time) {
+  _fire() {
     const g = this.game;
-    this.fireT -= dt;
-    if (this.fireT > 0) return;
-    this.fireT += this.fireInterval;
-    if (this.fireT < 0) this.fireT = this.fireInterval;
+    this.ammo--;
+    this.fireT = CONFIG.bullets.fireInterval;
+    this.recoil = 1;
 
-    const spec = {
-      color: this.bulletColor,
-      capacityMult: this.stats.capacityMult,
-      critChance: this.stats.critChance,
-      speedMult: 1,
-    };
+    const a = this.aim;
+    const ca = Math.cos(a), sa = Math.sin(a);
+    // muzzle in world space: the gun sits to the character's right
+    const mx = this.x + sa * this.muzzleOffset.z + ca * this.muzzleOffset.x;
+    const mz = this.z + ca * this.muzzleOffset.z - sa * this.muzzleOffset.x;
+    const my = this.y + this.muzzleOffset.y;
 
-    // gentle assist: the fantasy is constant action, not marksmanship
-    let aim = 0;
-    const target = this._nearestAhead(42);
-    if (target) {
-      const a = Math.atan2(target.x - this.x, target.z - this.z);
-      if (Math.abs(a) < 0.95) aim = a * 0.5;
-    }
-
-    const n = Math.max(1, Math.round(this.stats.bulletCount));
-    const spread = (CONFIG.bullets.spreadDeg * Math.PI) / 180;
-    for (let i = 0; i < n; i++) {
-      const off = n === 1 ? (Math.random() - 0.5) * spread * 1.6
-        : (i - (n - 1) / 2) * spread + (Math.random() - 0.5) * spread * 0.4;
-      g.bullets.fire(this.x, this.y + 1.5, this.z + 1.4, aim + off, spec);
-    }
-
-    this.muzzle.scale.setScalar(1.7);
-    g.fx.particles.cone(this.x, this.y + 1.5, this.z + 1.8, Math.sin(aim), Math.cos(aim), 2, 0x8ff2ff, {
-      speed: 16, size: 0.3, life: 0.16, spread: 0.4, stretch: 2.6, gravity: 0,
+    g.bullets.fire(mx, my, mz, a, { color: this.bulletColor });
+    g.fx.particles.cone(mx, my, mz, sa, ca, 3, this.bulletColor.getHex(), {
+      speed: 14, size: 0.2, life: 0.12, spread: 0.3, stretch: 2.0, gravity: 0,
     });
-    g.audio.fire(1 + Math.random() * 0.06);
-  }
-
-  _nearestAhead(range) {
-    const g = this.game;
-    let best = null, bestD = range * range;
-    if (g.boss && g.boss.alive) {
-      const dx = g.boss.x - this.x, dz = g.boss.z - this.z;
-      if (dz > 0 && dx * dx + dz * dz < bestD * 2.2) return g.boss;
-    }
-    g.enemies.forEachNear(this.x, this.z + range * 0.45, range, (e) => {
-      if (e.dying > 0) return;
-      const dx = e.x - this.x, dz = e.z - this.z;
-      if (dz < -4) return;
-      const d = dx * dx + dz * dz;
-      if (d < bestD) { bestD = d; best = e; }
-    });
-    return best;
+    g.audio.fire();
+    g.onPlayerFired();
   }
 }
 
-function pointer(e, wantId) {
-  const id = e.pointerId ?? 0;
-  if (wantId !== undefined && wantId !== null && id !== wantId) return null;
-  return { id, x: e.clientX, y: e.clientY };
+/**
+ * The aim line.
+ *
+ * It draws where the round will go and, crucially, where it will go after it
+ * hits the wall. The bounce leg is the brighter of the two, because that is
+ * the shot the game wants the player to take. This is the tutorial that never
+ * stops running: no text, no tooltip, just the answer drawn on the floor.
+ */
+class AimLine {
+  constructor(scene) {
+    const geo = new THREE.PlaneGeometry(1, 1);
+    geo.rotateX(-Math.PI / 2);
+    geo.translate(0, 0, 0.5);
+    const mk = (opacity) => {
+      const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+        color: 0x8ff0e0, transparent: true, opacity, depthWrite: false, toneMapped: true,
+      }));
+      m.renderOrder = 3;
+      m.visible = false;
+      scene.add(m);
+      return m;
+    };
+    this.direct = mk(0.13);
+    this.bounce = mk(0.3);
+    this.dot = new THREE.Mesh(
+      new THREE.CircleGeometry(0.34, 18).rotateX(-Math.PI / 2),
+      new THREE.MeshBasicMaterial({ color: 0x8ff0e0, transparent: true, opacity: 0.4, depthWrite: false })
+    );
+    this.dot.renderOrder = 3;
+    this.dot.visible = false;
+    scene.add(this.dot);
+  }
+
+  setColor(hex) {
+    this.direct.material.color.setHex(hex);
+    this.bounce.material.color.setHex(hex);
+    this.dot.material.color.setHex(hex);
+  }
+
+  update(p, arena, on) {
+    this.direct.visible = this.bounce.visible = this.dot.visible = on;
+    if (!on) return;
+    const a = p.aim;
+    const dx = Math.sin(a), dz = Math.cos(a);
+    const y = p.y + 0.09;
+    const first = arena.raycast(p.x, p.z, dx, dz, 30);
+
+    place(this.direct, p.x, y, p.z, a, 0.18, first.dist);
+
+    if (first.hit) {
+      const dot = dx * first.nx + dz * first.nz;
+      const rx = dx - 2 * dot * first.nx;
+      const rz = dz - 2 * dot * first.nz;
+      const second = arena.raycast(first.x, first.z, rx, rz, 20);
+      place(this.bounce, first.x, y, first.z, Math.atan2(rx, rz), 0.26, second.dist);
+      this.dot.position.set(first.x, y + 0.01, first.z);
+      this.dot.visible = true;
+    } else {
+      this.bounce.visible = false;
+      this.dot.visible = false;
+    }
+  }
+}
+
+function place(mesh, x, y, z, angle, width, length) {
+  mesh.position.set(x, y, z);
+  mesh.rotation.y = angle;
+  mesh.scale.set(width, 1, Math.max(0.1, length));
+}
+
+function angleDamp(a, b, rate, dt) {
+  const d = ((b - a + Math.PI) % TAU + TAU) % TAU - Math.PI;
+  return a + d * (1 - Math.exp(-rate * dt));
 }

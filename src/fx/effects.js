@@ -3,9 +3,13 @@ import { glowTexture } from '../world/geometry.js';
 import { Pool, clamp } from '../core/utils.js';
 
 /**
- * Pooled non-particle effects: shockwave rings, impact flashes, lightning
- * chains and screen-wide flashes. Everything is preallocated so combat never
- * allocates mid-frame.
+ * Pooled non-particle effects: ground rings, impact flashes and the screen
+ * wash used when the player is hurt. Everything is preallocated so combat
+ * never allocates mid-frame.
+ *
+ * Rings are the workhorse and they are painted, not additive: a ring is a mark
+ * on the floor that says where something happened, and it has to stay readable
+ * on top of a bright floor as well as a dark one.
  */
 export class Effects {
   constructor(scene, renderer, particles) {
@@ -18,8 +22,7 @@ export class Effects {
     ringGeo.rotateX(-Math.PI / 2);
     const ringMat = new THREE.MeshBasicMaterial({
       color: 0xffffff, transparent: true, opacity: 1,
-      blending: THREE.AdditiveBlending, depthWrite: false,
-      side: THREE.DoubleSide, toneMapped: false,
+      depthWrite: false, side: THREE.DoubleSide, toneMapped: true,
     });
     this.rings = new Pool(28, () => {
       const m = new THREE.Mesh(ringGeo, ringMat.clone());
@@ -32,7 +35,7 @@ export class Effects {
     const glow = glowTexture(renderer);
     const flashMat = new THREE.SpriteMaterial({
       map: glow, color: 0xffffff, transparent: true,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
+      depthWrite: false, toneMapped: true,
     });
     this.flashes = new Pool(64, () => {
       const s = new THREE.Sprite(flashMat.clone());
@@ -41,27 +44,11 @@ export class Effects {
       return { sprite: s, t: 0, life: 0.2, size: 3 };
     });
 
-    // --- lightning chains ------------------------------------------------
-    const boltMat = new THREE.MeshBasicMaterial({
-      color: 0xc7a3ff, transparent: true, opacity: 1,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-    });
-    const boltGeo = new THREE.PlaneGeometry(1, 1);
-    boltGeo.translate(0.5, 0, 0);
-    this.bolts = new Pool(20, () => {
-      const m = new THREE.Mesh(boltGeo, boltMat.clone());
-      m.visible = false; m.renderOrder = 7;
-      m.rotation.x = -Math.PI / 2;
-      scene.add(m);
-      return { mesh: m, t: 0, life: 0.16 };
-    });
-
     // --- expanding explosion spheres -------------------------------------
     const sphGeo = new THREE.IcosahedronGeometry(1, 1);
     const sphMat = new THREE.MeshBasicMaterial({
       color: 0xffffff, transparent: true, opacity: 0.6,
-      blending: THREE.AdditiveBlending, depthWrite: false, toneMapped: false,
-      wireframe: false,
+      depthWrite: false, toneMapped: true, wireframe: false,
     });
     this.blasts = new Pool(16, () => {
       const m = new THREE.Mesh(sphGeo, sphMat.clone());
@@ -95,21 +82,6 @@ export class Effects {
     f.sprite.material.opacity = 1;
     f.sprite.scale.setScalar(size);
     f.sprite.visible = true;
-  }
-
-  bolt(x1, y, z1, x2, z2, color, width = 0.42, life = 0.16) {
-    let b = this.bolts.acquire();
-    if (!b) { this.bolts.release(this.bolts.active[0]); b = this.bolts.acquire(); }
-    b.t = 0; b.life = life;
-    const dx = x2 - x1, dz = z2 - z1;
-    const len = Math.hypot(dx, dz);
-    b.mesh.position.set(x1, y, z1);
-    b.mesh.rotation.set(-Math.PI / 2, 0, 0);
-    b.mesh.rotation.z = -Math.atan2(dz, dx);
-    b.mesh.scale.set(len, width, 1);
-    b.mesh.material.color.setHex(color);
-    b.mesh.material.opacity = 1;
-    b.mesh.visible = true;
   }
 
   blast(x, y, z, color, size, life = 0.34) {
@@ -152,15 +124,6 @@ export class Effects {
       f.sprite.material.opacity = (1 - t) * (1 - t);
     }
 
-    for (let i = this.bolts.active.length - 1; i >= 0; i--) {
-      const b = this.bolts.active[i];
-      b.t += dt;
-      const t = b.t / b.life;
-      if (t >= 1) { b.mesh.visible = false; this.bolts.release(b); continue; }
-      b.mesh.material.opacity = 1 - t;
-      b.mesh.scale.y = b.mesh.scale.y * 0.9 + 0.02;
-    }
-
     for (let i = this.blasts.active.length - 1; i >= 0; i--) {
       const b = this.blasts.active[i];
       b.t += dt;
@@ -182,7 +145,7 @@ export class Effects {
   }
 
   reset() {
-    for (const p of [this.rings, this.flashes, this.bolts, this.blasts]) {
+    for (const p of [this.rings, this.flashes, this.blasts]) {
       for (const it of [...p.active]) {
         (it.mesh || it.sprite).visible = false;
         p.release(it);

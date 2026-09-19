@@ -4,8 +4,12 @@ import { glowTexture } from '../world/geometry.js';
 /**
  * One instanced, GPU-animated particle system for the whole game. The CPU only
  * writes attributes when a particle is spawned; motion, fade and billboarding
- * happen in the vertex shader, which keeps thousands of particles affordable on
- * a mid-range phone.
+ * happen in the vertex shader.
+ *
+ * Particles are alpha-blended rather than additive. Additive blending was what
+ * turned every impact in the old build into a bloom of light — here a particle
+ * is a chip of debris or a puff of dust, so it can be dark, and combat stops
+ * washing the arena out.
  */
 export class Particles {
   constructor(scene, renderer, capacity) {
@@ -44,14 +48,14 @@ export class Particles {
     this.uniforms = {
       uTime: { value: 0 },
       uMap: { value: glowTexture(renderer) },
-      uIntensity: { value: 0.85 },
+      uIntensity: { value: 1.0 },
     };
 
     const mat = new THREE.ShaderMaterial({
       uniforms: this.uniforms,
       transparent: true,
       depthWrite: false,
-      blending: THREE.AdditiveBlending,
+      blending: THREE.NormalBlending,
       vertexShader: /* glsl */`
         attribute vec3 aPos;
         attribute vec3 aVel;
