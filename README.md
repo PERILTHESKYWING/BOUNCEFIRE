@@ -89,7 +89,7 @@ src/
   fx/                   GPU particles, pooled effects, camera rig
   audio/                synthesised SFX on four buses, and a written score
   ui/                   HUD, screens, components, stylesheet
-vendor/three/           pinned Three.js r169
+vendor/three/           pinned Three.js r169 (core only)
 ```
 
 ## Save data
