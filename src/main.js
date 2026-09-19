@@ -1,26 +1,21 @@
 import * as THREE from 'three';
-import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
-import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
-import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
-import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 import { CONFIG, BOSS_DEF } from './core/config.js';
-import { detectQuality, clamp, damp, formatNumber, TAU } from './core/utils.js';
+import { detectQuality, clamp, damp, isTouch } from './core/utils.js';
 import { Save } from './core/save.js';
 import { Monetization } from './core/monetization.js';
 import { LEVELS } from './data/levels.js';
 import { THEMES } from './data/themes.js';
-import { BULLET_AURAS } from './data/progression.js';
 import { Arena } from './world/arena.js';
 import { Particles } from './fx/particles.js';
 import { Effects } from './fx/effects.js';
-import { DamageNumbers } from './fx/damageNumbers.js';
 import { CameraRig } from './fx/cameraRig.js';
 import { Bullets } from './game/bullets.js';
 import { Enemies } from './game/enemies.js';
 import { Player } from './game/player.js';
 import { Combat } from './game/combat.js';
 import { Boss } from './game/boss.js';
+import { Tutorial, TUTORIAL_LEVEL } from './game/tutorial.js';
 import { AudioEngine } from './audio/audio.js';
 import { Music } from './audio/music.js';
 import { HUD } from './ui/hud.js';
@@ -36,7 +31,8 @@ class Game {
     this.levelIndex = 0;
     this.difficulty = 1;
     this.bossKilled = false;
-    this.levelCoins = 0;
+    this.levelScrap = 0;
+    this.isTouch = isTouch();
 
     this.save = new Save();
     this.monetization = new Monetization();
@@ -48,7 +44,6 @@ class Game {
 
     this.camera = new THREE.PerspectiveCamera(CONFIG.render.fov, 1, CONFIG.render.near, CONFIG.render.far);
     this.cameraRig = new CameraRig(this.camera);
-    this.camera_ = this.camera;
 
     this.qualityName = this.save.data.settings.quality || detectQuality();
     this.quality = { ...CONFIG.quality[this.qualityName], low: this.qualityName === 'low' };
@@ -57,7 +52,6 @@ class Game {
     this.fx = {
       particles: new Particles(this.scene, this.renderer, CONFIG.quality.high.particles),
       effects: null,
-      damageNumbers: new DamageNumbers(this.camera, CONFIG.feel.damageNumberMerge),
     };
     this.fx.effects = new Effects(this.scene, this.renderer, this.fx.particles);
 
@@ -66,20 +60,22 @@ class Game {
     this.enemies = new Enemies(this.scene, this);
     this.player = new Player(this.scene, this);
     this.boss = new Boss(this.scene, this);
+    this.tutorial = new Tutorial(this);
+
+    this._initShowcase();
 
     this.uiRoot = document.getElementById('ui');
     this.hud = new HUD(this.uiRoot, this);
     this.screens = new Screens(this.uiRoot, this);
 
-    this._initPost();
     this._bindEvents();
     this.refreshStats();
     this.applyQuality(this.qualityName);
 
     this._clock = new THREE.Clock();
-    this._acc = 0;
     this._fpsSamples = [];
     this._autoQualityChecked = false;
+    this._slowMoT = 0;
   }
 
   // ------------------------------------------------------------------ setup
@@ -87,43 +83,41 @@ class Game {
   _initRenderer() {
     const canvas = document.getElementById('gl');
     const renderer = new THREE.WebGLRenderer({
-      canvas, antialias: false, powerPreference: 'high-performance', stencil: false,
+      canvas, antialias: true, powerPreference: 'high-performance', stencil: false,
     });
-    renderer.setClearColor(0x05060f, 1);
+    renderer.setClearColor(0x2b3641, 1);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 0.94;
+    renderer.toneMappingExposure = 1.24;
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     this.renderer = renderer;
   }
 
   _initScene() {
     this.scene = new THREE.Scene();
-    this.scene.fog = new THREE.Fog(0x080b1c, CONFIG.render.fogNear, CONFIG.render.fogFar);
+    this.scene.fog = new THREE.Fog(0x3a4650, 55, 200);
 
-    this.hemi = new THREE.HemisphereLight(0x2a52ff, 0x040616, 0.55);
+    // Lighting is plain and directional: one warm key, one cool fill, and a
+    // hemisphere to keep shadowed faces from going black. No coloured rim
+    // lights, no point lights on the level — the environment does not glow.
+    this.hemi = new THREE.HemisphereLight(0x9fb4c4, 0x3a3630, 0.85);
     this.scene.add(this.hemi);
 
-    this.key = new THREE.DirectionalLight(0x6ea8ff, 1.5);
-    this.key.position.set(-16, 40, -10);
+    this.key = new THREE.DirectionalLight(0xfff0d8, 1.5);
+    this.key.position.set(-24, 44, 16);
     this.scene.add(this.key);
 
-    this.rim = new THREE.DirectionalLight(0x00e5ff, 1.1);
-    this.rim.position.set(18, 22, 30);
-    this.scene.add(this.rim);
+    this.fill = new THREE.DirectionalLight(0x7d9ec4, 0.5);
+    this.fill.position.set(22, 20, -26);
+    this.scene.add(this.fill);
 
-    this.ambient = new THREE.AmbientLight(0xffffff, 0.16);
-    this.scene.add(this.ambient);
-
-    // Sky dome: a cheap vertical gradient with drifting stars, so levels never
-    // end in flat black above the maze. One draw call, follows the camera.
+    // Sky: a soft vertical gradient and nothing else. The old starfield was
+    // one more thing competing for attention above a maze nobody looks at.
     this.skyUniforms = {
-      uTop: { value: new THREE.Color(0x05060f) },
-      uBottom: { value: new THREE.Color(0x141c3c) },
-      uTime: { value: 0 },
-      uStars: { value: 0.6 },
+      uTop: { value: new THREE.Color(0x1d2630) },
+      uBottom: { value: new THREE.Color(0x4b5a63) },
     };
     const sky = new THREE.Mesh(
-      new THREE.SphereGeometry(300, 20, 14),
+      new THREE.SphereGeometry(290, 18, 12),
       new THREE.ShaderMaterial({
         uniforms: this.skyUniforms,
         side: THREE.BackSide,
@@ -137,20 +131,11 @@ class Game {
           }
         `,
         fragmentShader: `
-          uniform vec3 uTop; uniform vec3 uBottom; uniform float uTime; uniform float uStars;
+          uniform vec3 uTop; uniform vec3 uBottom;
           varying vec3 vPos;
-          float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
           void main() {
             float h = clamp(vPos.y * 0.5 + 0.5, 0.0, 1.0);
-            vec3 c = mix(uBottom, uTop, pow(h, 0.75));
-            // sparse twinkling stars in the upper hemisphere only
-            vec2 g = floor(vPos.xz * 46.0 + vPos.y * 13.0);
-            float s = hash(g);
-            if (s > 0.9965 && vPos.y > 0.02) {
-              float tw = 0.55 + 0.45 * sin(uTime * 2.2 + s * 60.0);
-              c += vec3(0.85, 0.92, 1.0) * tw * uStars * smoothstep(0.0, 0.3, vPos.y);
-            }
-            gl_FragColor = vec4(c, 1.0);
+            gl_FragColor = vec4(mix(uBottom, uTop, pow(h, 1.7)), 1.0);
           }
         `,
       })
@@ -161,13 +146,58 @@ class Game {
     this.sky = sky;
   }
 
-  _initPost() {
-    const r = this.renderer;
-    this.composer = new EffectComposer(r);
-    this.composer.addPass(new RenderPass(this.scene, this.camera));
-    this.bloom = new UnrealBloomPass(new THREE.Vector2(256, 256), 0.52, 0.55, 0.86);
-    this.composer.addPass(this.bloom);
-    this.composer.addPass(new OutputPass());
+  /**
+   * The menu backdrop.
+   *
+   * A separate little scene holding the player's own character on a plinth,
+   * lit and turning slowly. It shares materials with the in-game model, so
+   * equipping a skin changes what is standing on the title screen. This is
+   * what replaced attract mode: a title screen should show you your character,
+   * not a demo of the game playing itself behind the buttons.
+   */
+  _initShowcase() {
+    this.showScene = new THREE.Scene();
+    this.showScene.background = new THREE.Color(0x323b42);
+    // Framed so the figure sits in the lower half of the screen: the camera
+    // looks slightly above it, which leaves the top clear for the wordmark.
+    this.showCamera = new THREE.PerspectiveCamera(30, 1, 0.1, 100);
+    this.showCamera.position.set(2.4, 4.4, 23.5);
+    this.showCamera.lookAt(0, 2.9, 0);
+
+    this.showScene.add(new THREE.HemisphereLight(0xcadae6, 0x45403a, 1.35));
+    const k = new THREE.DirectionalLight(0xfff2de, 2.4);
+    k.position.set(-5, 8, 6);
+    this.showScene.add(k);
+    const r = new THREE.DirectionalLight(0x9cc0da, 0.95);
+    r.position.set(6, 3, -5);
+    this.showScene.add(r);
+
+    const plinth = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.4, 2.7, 0.7, 24),
+      new THREE.MeshStandardMaterial({ color: 0x4a545c, roughness: 0.95 })
+    );
+    plinth.position.y = -0.35;
+    this.showScene.add(plinth);
+
+    this.showPivot = new THREE.Group();
+    this.showPivot.rotation.y = -0.5;   // start three-quarters on, facing out
+    this.showScene.add(this.showPivot);
+
+    const model = this.player.group.clone(true);
+    // drop the gameplay-only bits: the shadow and the floor ring
+    for (const name of ['shadow', 'ring']) {
+      const src = this.player[name];
+      model.traverse((o) => { if (o.geometry === src?.geometry) o.visible = false; });
+    }
+    model.position.set(0, 0, 0);
+    model.rotation.set(0, 0, 0);
+    this.showPivot.add(model);
+    this.showModel = model;
+    this.showcase = null;
+  }
+
+  setShowcase(name) {
+    this.showcase = name;
   }
 
   applyQuality(name) {
@@ -177,8 +207,6 @@ class Game {
     this.renderer.setPixelRatio(Math.min(devicePixelRatio || 1, q.pixelRatio));
     this.bullets.setQuality(q.trailGhosts);
     this.fx?.particles?.setLimit(q.particles);
-    this.bloom.strength = q.bloomStrength;
-    this.useBloom = q.bloom;
     this._resize();
   }
 
@@ -194,10 +222,7 @@ class Game {
       this.audio.resume();
       this.audio.setMusicEnabled(this.save.data.settings.music);
       this.audio.setSfxEnabled(this.save.data.settings.sfx);
-      if (this.state === STATE.MENU && this.level) {
-        this.music.start(this.level.theme);
-        this.music.setIntensity(0.25);
-      }
+      this.music.start(this.state === STATE.MENU ? 'menu' : 'field');
     };
     addEventListener('pointerdown', unlock, { once: true });
     addEventListener('keydown', unlock, { once: true });
@@ -212,13 +237,20 @@ class Game {
   _resize() {
     const w = innerWidth, h = innerHeight;
     this.renderer.setSize(w, h, false);
-    this.composer.setSize(w, h);
-    this.bloom.resolution.set(Math.max(128, w * 0.4), Math.max(128, h * 0.4));
     this.camera.aspect = w / h;
-    // portrait phones need a wider vertical view than a desktop window
-    this.cameraRig.baseFov = CONFIG.render.fov * clamp(1.35 - (w / h) * 0.55, 0.85, 1.32);
+    // A portrait phone needs a taller view than a desktop window, but the
+    // player stays dead centre either way.
+    this.cameraRig.baseFov = CONFIG.render.fov * clamp(1.42 - (w / h) * 0.4, 0.95, 1.28);
+    this.cameraRig.distScale = clamp(1.0 - (w / h - 0.55) * 0.22, 0.6, 1.0);
     this.camera.fov = this.cameraRig.baseFov;
     this.camera.updateProjectionMatrix();
+    // In a wide window the menu column sits on the right, so the figure is
+    // framed off to the left instead of straight behind the buttons.
+    this.showCamera.aspect = w / h;
+    const wide = w / h > 1.25;
+    this.showCamera.position.set(wide ? 1.4 : 2.4, 4.4, 23.5);
+    this.showCamera.lookAt(wide ? 7.2 : 0, 2.9, 0);
+    this.showCamera.updateProjectionMatrix();
   }
 
   haptic(pattern) {
@@ -227,69 +259,71 @@ class Game {
   }
 
   refreshStats() {
-    const s = this.save.computeStats();
-    Object.assign(this.player.stats, s);
-    this.player.bulletColor.setHex(this.save.skinColor());
-    this.aura = this.save.aura();
+    Object.assign(this.player.stats, this.save.computeStats());
+    this.player.maxHp = this.player.stats.maxHp;
+    this.player.maxAmmo = Math.round(this.player.stats.magazine);
+    this.player.applySkins(this.save.character(), this.save.weapon());
   }
 
   // ---------------------------------------------------------- level control
 
+  startTutorial() {
+    this._beginLevel(TUTORIAL_LEVEL, 0);
+    this.tutorial.start();
+    this.hud.setLevel('TRAINING', 1);
+  }
+
   startLevel(index) {
-    this.stopAttract();
+    this.tutorial.stop();
     this.levelIndex = clamp(index, 0, LEVELS.length - 1);
-    const def = LEVELS[this.levelIndex];
+    this._beginLevel(LEVELS[this.levelIndex], this.levelIndex);
+  }
+
+  _beginLevel(def, index) {
     this.level = def;
-    this.difficulty = 1 + this.levelIndex * 0.16;
+    this.difficulty = def.tutorial ? 1 : 1 + index * 0.1;
     this.bossKilled = false;
     this.bossSpawned = false;
-    this.levelCoins = 0;
-    this.victoryT = 0;
+    this.levelScrap = 0;
 
     this.screens.hide();
+    this.setShowcase(null);
     this.arena.build(def);
     this._applyTheme(THEMES[def.theme]);
 
-    this.enemies.spawnFromArena(this.arena);
+    if (def.tutorial) this.enemies.clear();
+    else this.enemies.spawnFromArena(this.arena);
+
     this.bullets.clear();
     this.fx.particles.reset();
     this.fx.effects.reset();
-    this.fx.damageNumbers.reset();
     this.combat.reset();
     this.monetization.resetRun();
     this.refreshStats();
 
-    this.player.reset(0, 6);
-    this.player.y = this.arena.floorAt(6);
+    this.player.reset(0, 8);
+    this.player.y = this.arena.floorAt(8);
     this.cameraRig.zoom = 0;
-    this.cameraRig.snapTo({ x: this.player.x, y: this.player.y, z: this.player.z });
+    this.cameraRig.snapTo(this.player);
 
-    if (def.boss) {
-      this.bossChamber = this.arena.chambers.find((c) => c.boss);
-      this.boss.despawn();
-      this.hud.hideBoss();
-    } else {
-      this.bossChamber = null;
-      this.boss.despawn();
-      this.hud.hideBoss();
-    }
+    this.bossChamber = def.boss ? this.arena.chambers.find((c) => c.boss) : null;
+    this.boss.despawn();
+    this.hud.hideBoss();
 
     this.hud.setLevel(def.name, Math.max(1, this.enemies.totalCount));
     this.hud.show(true);
-    this.hud.banner1(def.name, def.intro, THEMES[def.theme].accent);
+    if (def.intro) this.hud.bannerLine(def.name, def.intro);
 
     this.audio.resume();
-    this.music.start(def.theme);
-    this.music.setIntensity(0.12);
+    this.music.start(def.boss ? 'boss' : 'field');
 
     this.state = STATE.PLAYING;
     this.timeScale = 1;
   }
 
   _applyTheme(t) {
-    this.skyUniforms.uTop.value.setHex(t.bg);
-    this.skyUniforms.uBottom.value.setHex(t.fog).lerp(new THREE.Color(t.hemiSky), 0.22);
-    this.skyUniforms.uStars.value = t.id === 'void' ? 1.0 : t.id === 'volcanic' ? 0.15 : 0.5;
+    this.skyUniforms.uTop.value.setHex(t.skyTop);
+    this.skyUniforms.uBottom.value.setHex(t.skyBottom);
     this.scene.fog.color.setHex(t.fog);
     this.scene.fog.near = t.fogNear;
     this.scene.fog.far = t.fogFar;
@@ -299,78 +333,19 @@ class Game {
     this.hemi.intensity = t.hemiInt;
     this.key.color.setHex(t.keyColor);
     this.key.intensity = t.keyInt;
-    this.rim.color.setHex(t.rimColor);
-    this.rim.intensity = t.rimInt;
-    this.bloom.strength = this.quality.bloomStrength * t.bloom;
+    this.fill.color.setHex(t.fillColor);
+    this.fill.intensity = t.fillInt;
     this.theme = t;
     document.documentElement.style.setProperty('--accent', t.accent);
     document.documentElement.style.setProperty('--accent-2', t.accent2);
-    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', '#' + t.bg.toString(16).padStart(6, '0'));
-  }
-
-  /**
-   * Attract mode: the menu sits over a live arena playing itself. It is the
-   * same simulation as a real level, driven by a scripted input curve, so the
-   * first thing anyone sees is the game actually running.
-   */
-  startAttract() {
-    const idx = Math.min(this.save.data.maxLevelReached, LEVELS.length - 1);
-    const pick = LEVELS[idx] && !LEVELS[idx].boss ? idx : 0;
-    const def = LEVELS[pick];
-    this.level = def;
-    this.levelIndex = pick;
-    this.difficulty = 1;
-    this.attract = true;
-    this.attractT = 0;
-    this.bossChamber = null;
-    this.bossSpawned = false;
-
-    this.arena.build(def);
-    this._applyTheme(THEMES[def.theme]);
-    this.enemies.spawnFromArena(this.arena);
-    this.bullets.clear();
-    this.fx.particles.reset();
-    this.fx.effects.reset();
-    this.fx.damageNumbers.reset();
-    this.combat.reset();
-    this.refreshStats();
-    this.player.reset(0, 10);
-    this.player.y = this.arena.floorAt(10);
-    this.player.invuln = 1e9;          // the demo never takes damage
-    this.cameraRig.zoom = 4;
-    this.cameraRig.snapTo({ x: 0, y: this.player.y, z: this.player.z });
-    this.hud.show(false);
-    this.hud.hideBoss();
-  }
-
-  stopAttract() {
-    this.attract = false;
-    this.player.invuln = 0;
-  }
-
-  _driveAttract(dt) {
-    this.attractT += dt;
-    const t = this.attractT;
-    const p = this.player;
-    p.input.mag = 0.85;
-    p.input.dx = Math.sin(t * 0.55) * 0.85;
-    p.input.dz = 0.55 + Math.sin(t * 0.31) * 0.3;
-    const d = Math.hypot(p.input.dx, p.input.dz) || 1;
-    p.input.dx /= d; p.input.dz /= d;
-    p.invuln = 1e9;
-
-    // loop the demo when it runs out of arena or enemies
-    if (p.z > this.arena.bounds.maxZ - 26 || this.enemies.aliveCount === 0) {
-      this.save.data.maxLevelReached = this.save.data.maxLevelReached;  // unchanged
-      this.startAttract();
-    }
+    document.querySelector('meta[name="theme-color"]')?.setAttribute('content', hexStr(t.bg));
   }
 
   pause() {
     if (this.state !== STATE.PLAYING) return;
     this.state = STATE.PAUSED;
+    this.player.releaseInput();
     this.hud.show(false);
-    this.music.setIntensity(0.05);
     this.screens.show('pause');
   }
 
@@ -383,19 +358,18 @@ class Game {
 
   quitToMenu() {
     this.state = STATE.MENU;
+    this.tutorial.stop();
+    this.player.releaseInput();
     this.hud.show(false);
     this.hud.hideBoss();
-    this.music.stop();
     this.save.recordRun({
-      kills: this.combat.kills, bounces: this.bullets.stats.bounces,
-      damage: this.combat.totalDamage, bestCombo: this.combat.peakCombo,
+      kills: this.combat.kills,
+      bounces: this.bullets.stats.bounces,
+      banked: this.bullets.stats.banked,
     });
     this.boss.despawn();
-    this.hud.setOverdrive(false);
-    this.startAttract();
+    this.music.start('menu');
     this.screens.show('title');
-    if (this.audio.ready) this.music.start(this.level.theme);
-    this.music.setIntensity(0.25);
   }
 
   revive() {
@@ -403,111 +377,90 @@ class Game {
     this.player.revive();
     this.hud.show(true);
     this.state = STATE.PLAYING;
-    this.fx.effects.screenFlash('#8a5bff', 0.6, 0.6);
-    this.fx.effects.ring(this.player.x, this.player.y + 0.3, this.player.z, 0x8a5bff, 1, 28, 0.7);
+    this.fx.effects.ring(this.player.x, this.player.y + 0.2, this.player.z, 0x8ff0e0, 1, 22, 0.6);
     this.audio.ui('reward');
     // clear the immediate area so the revive is not instantly wasted
-    this.enemies.forEachNear(this.player.x, this.player.z, 16, (e) => {
+    this.enemies.forEachNear(this.player.x, this.player.z, 14, (e) => {
       if (e.dying > 0) return;
-      this.combat.damageEnemy(e, 1e9, { color: 0x8a5bff });
+      this.combat.damageEnemy(e, 1e9, {});
     });
   }
 
   // -------------------------------------------------------------- callbacks
 
-  addCoins(n) {
-    this.levelCoins += n;
-    this.save.addCoins(n);
+  addScrap(n) {
+    this.levelScrap += n;
+    this.save.addScrap(n);
   }
 
-  onEnemyKilled() {
+  onPlayerFired() { /* the HUD polls ammo each frame */ }
+  onReload() { this.audio.reload(); }
+
+  onRefund() {
+    this.audio.refund();
+    this.hud.flashAmmo();
+  }
+
+  onEnemyKilled(e, opts) {
+    if (this.tutorial.active) this.tutorial.onKill(e, opts);
     if (this.state !== STATE.PLAYING) return;
+    this._checkRoomClear();
     this._checkVictory();
   }
 
   onModifier(mod, collider) {
-    const g = this;
-    const c = '#' + mod.color.toString(16).padStart(6, '0');
-    g.hud.toast(`${mod.label} ${mod.sub}`, c);
-    g.fx.effects.ring(collider.x, collider.baseY + 0.3, collider.z, mod.color, 1.2, 14 * mod.punch, 0.5);
-    g.fx.effects.flash(collider.x, collider.baseY + 3.2, collider.z, mod.color, 9 * mod.punch, 0.28);
-    g.fx.particles.burst(collider.x, collider.baseY + 3, collider.z, Math.round(22 * mod.punch), mod.color, {
-      speed: 20, size: 0.7, life: 0.55, spread: 2.4, gravity: 9, stretch: 1.6,
+    this.hud.toast(mod.label, hexStr(mod.color));
+    this.fx.effects.ring(collider.x, collider.baseY + 0.12, collider.z, mod.color, 1.0, 9, 0.35);
+    this.fx.particles.burst(collider.x, collider.baseY + 2.2, collider.z, 8, mod.color, {
+      speed: 11, size: 0.3, life: 0.35, spread: 1.2, gravity: 8,
     });
-    g.cameraRig.addShake(0.18 * mod.punch);
-    g.cameraRig.kickFov(1.4 * mod.punch);
-    g.fx.effects.screenFlash(c, 0.13 * mod.punch, 0.22);
-    g.audio.modifier(mod.punch, 240 + (mod.color & 0xff));
-    g.haptic(Math.round(12 * mod.punch));
+    this.audio.modifier();
+    this.haptic(10);
   }
 
-  onComboMilestone(value, index) {
-    const label = value >= CONFIG.combo.overdriveAt ? `COMBO ${value}` : `COMBO ${value}`;
-    this.hud.banner1(label, index >= 3 ? 'UNSTOPPABLE' : 'KEEP GOING', '#ffd257');
-    this.audio.combo(index);
-    this.music.duckFor(0.45);
-    this.cameraRig.addShake(0.22);
-    this.fx.effects.screenFlash('#ffd257', 0.14, 0.3);
-    this.haptic([10, 30, 10]);
-  }
-
-  onOverdrive(on) {
-    this.hud.setOverdrive(on);
-    if (on) {
-      this.hud.banner1('OVERDRIVE', 'DAMAGE ×1.5 · RAPID FIRE', '#ff5ea8');
-      this.audio.overdrive();
-      this.music.duckFor(0.7);
-      this.cameraRig.addShake(0.5);
-      this.cameraRig.kickFov(5);
-      this.fx.effects.screenFlash('#ff5ea8', 0.35, 0.5);
-      this.timeScale = CONFIG.feel.slowMoScale;
-      this._slowMoT = 0.3;
-      this.haptic([20, 40, 20, 40, 60]);
-    }
-  }
-
-  onComboReset() { /* the decay bar already tells the story */ }
-
-  onPlayerHit() {
+  onPlayerHit(amount) {
     this.hud.hurt();
     this.audio.playerHit();
-    this.cameraRig.addShake(0.5);
-    this.fx.effects.screenFlash('#ff2b4d', 0.3, 0.3);
-    this.fx.particles.burst(this.player.x, this.player.y + 1.5, this.player.z, 18, 0xff4d6d, {
-      speed: 16, size: 0.6, life: 0.45, spread: 1.2,
+    this.cameraRig.addShake(0.22);
+    this.fx.effects.screenFlash('#c4453a', clamp(0.15 + amount / 120, 0.15, 0.4), 0.3);
+    this.fx.particles.burst(this.player.x, this.player.y + 1.4, this.player.z, 8, 0xc4453a, {
+      speed: 11, size: 0.3, life: 0.35, spread: 0.8,
     });
-    this.haptic([30, 30, 30]);
+    this.haptic([25, 25, 25]);
   }
-
-  onShieldChange() { /* HUD polls this each frame */ }
 
   onPlayerDead() {
     if (this.state !== STATE.PLAYING) return;
     this.state = STATE.DEAD;
-    this.timeScale = 0.25;
+    this.timeScale = CONFIG.feel.slowMoScale;
     this._slowMoT = 1.0;
-    this.fx.effects.screenFlash('#ff2b4d', 0.7, 0.7);
-    this.fx.effects.blast(this.player.x, this.player.y + 1.5, this.player.z, 0xff4d6d, 12, 0.5);
-    this.cameraRig.addShake(1.1);
-    this.audio.enemyDeath(true);
-    this.music.setIntensity(0);
+    this.fx.effects.screenFlash('#c4453a', 0.5, 0.6);
+    this.cameraRig.addShake(0.5);
+    this.audio.enemyDeath(5);
+    this.music.duckFor(1.4);
     setTimeout(() => {
       if (this.state !== STATE.DEAD) return;
       this.timeScale = 1;
       this.hud.show(false);
-      this.screens.show('defeat', { levelName: this.level.name });
-    }, 1200);
+      this.screens.show('defeat', { levelName: this.level.name, hint: this._deathHint() });
+    }, 1300);
+  }
+
+  /** One line, chosen from how they actually died. Not a tips carousel. */
+  _deathHint() {
+    if (this.bullets.stats.banked < this.bullets.stats.fired * 0.15) {
+      return 'Try banking more shots — a bounce pays the round back and hits harder.';
+    }
+    if (this.combat.bestStreak < 5) {
+      return 'Keep moving. Every attack in the game draws a mark on the floor first.';
+    }
+    return '';
   }
 
   onBossPhase(phase, index) {
-    this.hud.setBossPhase(phase.name);
-    this.hud.banner1(phase.name, 'PHASE ' + (index + 1), '#ff5ea8');
+    this.hud.bannerLine(phase.name, 'PHASE ' + (index + 1));
     this.audio.bossPhase();
-    this.cameraRig.addShake(0.6);
-    this.fx.effects.screenFlash('#ff5ea8', 0.3, 0.45);
-    this.fx.effects.ring(this.boss.x, this.boss.floorY + 0.3, this.boss.z, phase.color, 3, 40, 0.8);
-    this.timeScale = CONFIG.feel.slowMoScale;
-    this._slowMoT = 0.35;
+    this.cameraRig.addShake(0.3);
   }
 
   onBossDead() {
@@ -516,12 +469,48 @@ class Game {
     this.hud.hideBoss();
     this.timeScale = CONFIG.feel.slowMoScale;
     this._slowMoT = 1.1;
-    this.addCoins(CONFIG.economy.coinsPerBoss);
-    setTimeout(() => this._checkVictory(), 2400);
+    this.addScrap(400);
+    setTimeout(() => this._checkVictory(), 2200);
+  }
+
+  onTutorialComplete() {
+    this.state = STATE.RESULTS;
+    this.save.data.tutorialDone = true;
+    this.save.addScrap(250);
+    this.save.save();
+    this.hud.setObjective(null);
+    this.hud.bannerLine('TRAINING COMPLETE', '+250 scrap');
+    this.audio.ui('reward');
+    setTimeout(() => {
+      this.hud.show(false);
+      this.quitToMenu();
+    }, 1800);
+  }
+
+  /**
+   * Rooms are the pacing unit. Clearing one restores health, which is what
+   * makes "push into the next room" a decision the player makes on purpose.
+   */
+  _checkRoomClear() {
+    const c = this.arena.chamberAt(this.player.z);
+    if (!c || c.cleared || !c.total) return;
+    let left = 0;
+    for (const e of this.enemies.pool.active) {
+      if (e.dying > 0 || e.hp <= 0) continue;
+      if (e.chamber === c.index) left++;
+    }
+    if (left > 0) return;
+    c.cleared = true;
+    const healed = this.player.heal(CONFIG.player.waveClearHeal);
+    this.addScrap(CONFIG.economy.waveClearBonus);
+    this.audio.waveClear();
+    this.hud.bannerLine('ROOM CLEAR', healed > 0 ? `+${Math.round(healed)} health` : null);
+    this.fx.effects.ring(this.player.x, this.player.y + 0.1, this.player.z, 0x8ff0e0, 1, 16, 0.5);
   }
 
   _checkVictory() {
     if (this.state !== STATE.PLAYING) return;
+    if (this.level.tutorial) return;
     if (this.enemies.aliveCount > 0) return;
     if (this.level.boss && !this.bossKilled) return;
     this._victory();
@@ -530,25 +519,21 @@ class Game {
   _victory() {
     this.state = STATE.RESULTS;
     this.timeScale = CONFIG.feel.slowMoScale;
-    this._slowMoT = 1.2;
-    this.hud.banner1('CLEAR', this.level.name, '#3dffa0');
-    this.fx.effects.screenFlash('#ffffff', 0.55, 0.7);
-    this.cameraRig.addShake(0.6);
-    this.cameraRig.kickFov(6);
+    this._slowMoT = 1.1;
+    this.hud.bannerLine('CLEARED', this.level.name);
+    this.cameraRig.addShake(0.2);
     this.audio.ui('reward');
-    this.music.duckFor(1.2);
-    this.haptic([20, 50, 20, 50, 80]);
+    this.music.duckFor(1.4);
+    this.haptic([20, 50, 20]);
 
-    const coins = Math.round(
-      this.levelCoins + CONFIG.economy.levelClearBonus * (1 + this.levelIndex * 0.35)
-      + this.combat.peakCombo * CONFIG.economy.comboCoinBonus
-    );
-    this.save.addCoins(coins - this.levelCoins);
+    const bonus = Math.round(CONFIG.economy.levelClearBonus * (1 + this.levelIndex * 0.4));
+    this.save.addScrap(bonus);
     this.save.data.maxLevelReached = Math.max(this.save.data.maxLevelReached, Math.min(LEVELS.length - 1, this.levelIndex + 1));
     this.save.data.levelIndex = Math.min(LEVELS.length - 1, this.levelIndex + 1);
     this.save.recordRun({
-      kills: this.combat.kills, bounces: this.bullets.stats.bounces,
-      damage: this.combat.totalDamage, bestCombo: this.combat.peakCombo,
+      kills: this.combat.kills,
+      bounces: this.bullets.stats.bounces,
+      banked: this.bullets.stats.banked,
     });
     this.save.save();
 
@@ -556,24 +541,23 @@ class Game {
       this.timeScale = 1;
       this.hud.show(false);
       this.hud.hideBoss();
-      this.music.stop(1.2);
       this.monetization.maybeInterstitial();
       this.screens.show('results', {
         levelName: this.level.name,
-        coins,
+        scrap: this.levelScrap + bonus,
         kills: this.combat.kills,
-        bestCombo: this.combat.peakCombo,
+        banked: this.bullets.stats.banked,
+        bestStreak: this.combat.bestStreak,
         bossKilled: this.bossKilled,
         nextIndex: Math.min(LEVELS.length - 1, this.levelIndex + 1),
         hasNext: this.levelIndex + 1 < LEVELS.length,
       });
-    }, 1750);
+    }, 1600);
   }
 
   // ------------------------------------------------------------------- loop
 
   start() {
-    this.startAttract();
     this.screens.show('title');
     this._resize();
     this.renderer.setAnimationLoop(() => this._frame());
@@ -583,7 +567,6 @@ class Game {
     const raw = Math.min(0.05, this._clock.getDelta());
     this.time += raw;
 
-    // hit stop then slow motion: the two levers that make big moments land
     if (this.combat.hitStop > 0) {
       this.combat.hitStop -= raw;
       this._render();
@@ -593,112 +576,89 @@ class Game {
       this._slowMoT -= raw;
       if (this._slowMoT <= 0) this.timeScale = 1;
     } else if (this.timeScale < 1) {
-      this.timeScale = damp(this.timeScale, 1, 4, raw);
+      this.timeScale = damp(this.timeScale, 1, 5, raw);
       if (this.timeScale > 0.985) this.timeScale = 1;
     }
 
     const dt = raw * this.timeScale;
-    const inMenu = this.state === STATE.MENU && this.attract;
-    const playing = this.state === STATE.PLAYING || this.state === STATE.DEAD || this.state === STATE.RESULTS;
+    const live = this.state === STATE.PLAYING || this.state === STATE.DEAD || this.state === STATE.RESULTS;
 
-    if (inMenu) this._driveAttract(dt);
-
-    if (playing || inMenu) {
-      this.player.update(dt, this.time);
+    if (live) {
+      this.player.update(dt, this.time, this.camera);
       this.enemies.update(dt, this.time);
       if (this.boss.group.visible) this.boss.update(dt, this.time);
       this.bullets.update(dt, this.time);
       this.combat.update(dt);
       this.arena.update(dt, this.time);
+      if (this.state === STATE.PLAYING) {
+        this._bossTrigger();
+        if (this.tutorial.active) this.tutorial.update(dt);
+        this.hud.update(raw);
+      }
       this._ambient(dt);
-      if (playing) this._bossTrigger();
+      this.cameraRig.update(raw, this.player, this.player.aim);
+      this.sky.position.copy(this.camera.position);
       this._intensity(dt);
-      if (playing) this.hud.update(raw);
-    } else {
-      this.arena.update(dt, this.time);
     }
 
-    this.cameraRig.update(raw, this.player, this.player.vx);
-    this.sky.position.copy(this.camera.position);
-    this.skyUniforms.uTime.value = this.time;
     this.fx.particles.update(raw);
     this.fx.effects.update(raw);
-    this.fx.damageNumbers.update(raw, !(playing || inMenu));
+
+    if (this.showcase) {
+      this.showPivot.rotation.y += raw * 0.26;
+      this.showPivot.position.y = Math.sin(this.time * 1.2) * 0.06;
+    }
 
     this._render();
     this._autoQuality(raw);
   }
 
   _render() {
-    if (this.useBloom) this.composer.render();
+    if (this.showcase) this.renderer.render(this.showScene, this.showCamera);
     else this.renderer.render(this.scene, this.camera);
   }
 
-  /** Drifting ambience plus the equipped bullet aura. */
+  /** A little drifting dust, and nothing else. Ambience, not spectacle. */
   _ambient(dt) {
     const t = this.theme;
-    if (!t) return;
-    const rate = t.moteRate * (this.quality.low ? 18 : 36);
-    if (Math.random() < dt * rate) {
+    if (!t || this.quality.low) return;
+    if (Math.random() < dt * t.dustRate * 7) {
       const b = this.arena.bounds;
-      const x = b.minX + Math.random() * (b.maxX - b.minX);
-      const z = this.player.z - 20 + Math.random() * 90;
-      this.fx.particles.mote(x, this.arena.floorAt(z) + Math.random() * 12, z, t.ambientMotes, 0.5 + Math.random() * 0.6, 3 + Math.random() * 3);
-    }
-
-    const aura = this.aura;
-    if (aura && aura.particles > 0) {
-      const list = this.bullets.pool.active;
-      const n = Math.min(list.length, this.quality.low ? 6 : 16);
-      const budget = dt * 60 * aura.particles;
-      for (let i = 0; i < n; i++) {
-        if (Math.random() > budget / n * 2) continue;
-        const b = list[(Math.random() * list.length) | 0];
-        if (!b) continue;
-        let c = aura.color;
-        if (aura.rainbow) c = new THREE.Color().setHSL((this.time * 0.35 + b.age) % 1, 1, 0.6).getHex();
-        else if (aura.shift) c = new THREE.Color().setHSL((0.78 + Math.sin(this.time + b.age * 3) * 0.12) % 1, 0.9, 0.65).getHex();
-        this.fx.particles.spawn(b.x, b.y, b.z,
-          (Math.random() - 0.5) * 3, Math.random() * 2, (Math.random() - 0.5) * 3,
-          c, 0.32, 0.36, { gravity: -1, drag: 3 });
-      }
+      const x = this.player.x + (Math.random() - 0.5) * 60;
+      const z = this.player.z + (Math.random() - 0.5) * 60;
+      if (x < b.minX || x > b.maxX) return;
+      this.fx.particles.spawn(
+        x, this.arena.floorAt(z) + Math.random() * 9, z,
+        (Math.random() - 0.5) * 0.7, 0.25 + Math.random() * 0.4, (Math.random() - 0.5) * 0.7,
+        t.dust, 0.09 + Math.random() * 0.08, 3.5 + Math.random() * 3, { gravity: -0.3, drag: 0.4 }
+      );
     }
   }
 
   _bossTrigger() {
     if (!this.bossChamber || this.bossSpawned) return;
-    if (this.player.z < this.bossChamber.z0 + 10) return;
+    if (this.player.z < this.bossChamber.z0 + 12) return;
     this.bossSpawned = true;
     const c = this.bossChamber;
-    const z = c.z0 + (c.z1 - c.z0) * 0.62;
+    const z = c.z0 + (c.z1 - c.z0) * 0.58;
     this.boss.spawn(0, z, c.floorY, this.level.bossHpMult || 1);
-    this.hud.showBoss(BOSS_DEF.name, BOSS_DEF.phases[0].name);
-    this.hud.banner1(BOSS_DEF.name, 'DESTROY IT', '#ff5ea8');
-    this.cameraRig.zoom = 22;
-    this.cameraRig.addShake(0.8);
-    this.fx.effects.screenFlash('#ff5ea8', 0.4, 0.6);
+    this.hud.showBoss(BOSS_DEF.name);
+    this.hud.bannerLine(BOSS_DEF.name, 'break the plates');
+    this.cameraRig.zoom = 16;
+    this.cameraRig.addShake(0.35);
     this.audio.bossPhase();
-    this.music.setIntensity(0.9);
-    this.timeScale = CONFIG.feel.slowMoScale;
-    this._slowMoT = 0.7;
-    setTimeout(() => { this.cameraRig.zoom = 15; }, 2600);
+    this.music.start('boss');
+    setTimeout(() => { this.cameraRig.zoom = 6; }, 2400);
   }
 
-  /** Music and particle intensity track how dense the swarm has become. */
+  /** Intensity only nudges the mix. It no longer rewrites the arrangement. */
   _intensity(dt) {
-    const n = this.bullets.count;
-    const combo = this.combat.combo;
-    const i = clamp(n / 90, 0, 1) * 0.65 + clamp(combo / 120, 0, 1) * 0.35;
-    this.music.setIntensity(clamp(i + (this.boss.alive ? 0.25 : 0), 0, 1));
+    const near = clamp(this.enemies.aliveCount / 12, 0, 1);
+    const i = clamp(near * 0.7 + (this.boss.alive ? 0.4 : 0), 0, 1);
+    this.music.setIntensity(i);
     this.audio.setIntensity(i);
-    this.fx.particles.setIntensity(0.8 + clamp(i, 0, 1) * 0.3 + (this.combat.overdriveT > 0 ? 0.25 : 0));
-    if (this.bloom) {
-      const target = this.quality.bloomStrength * (this.theme?.bloom ?? 1) * (1 + i * 0.22 + (this.combat.overdriveT > 0 ? 0.22 : 0));
-      this.bloom.strength = damp(this.bloom.strength, target, 3, dt);
-    }
   }
 
-  /** If the device cannot hold a playable frame rate, step quality down once. */
   _autoQuality(dt) {
     if (this._autoQualityChecked || this.save.data.settings.quality) return;
     if (this.state !== STATE.PLAYING) return;
@@ -706,8 +666,7 @@ class Game {
     if (this._fpsSamples.length < 180) return;
     const avg = this._fpsSamples.reduce((a, b) => a + b, 0) / this._fpsSamples.length;
     this._fpsSamples.length = 0;
-    const fps = 1 / avg;
-    if (fps < 42 && this.qualityName !== 'low') {
+    if (1 / avg < 42 && this.qualityName !== 'low') {
       this.applyQuality(this.qualityName === 'high' ? 'medium' : 'low');
       if (this.qualityName === 'low') this._autoQualityChecked = true;
     } else {
@@ -715,6 +674,8 @@ class Game {
     }
   }
 }
+
+function hexStr(n) { return '#' + (n >>> 0).toString(16).padStart(6, '0'); }
 
 // ----------------------------------------------------------------- bootstrap
 
@@ -724,14 +685,14 @@ async function boot() {
   const status = bootEl.querySelector('.boot-status');
   const step = (p, text) => { bar.style.width = p + '%'; if (text) status.textContent = text; };
 
-  step(15, 'loading fonts');
+  step(15, 'loading');
   try { await document.fonts.ready; } catch { /* fonts are optional */ }
 
-  step(45, 'building systems');
+  step(50, 'building');
   const game = new Game();
   window.__BOUNCEFIRE__ = game;
 
-  step(75, 'warming shaders');
+  step(80, 'warming up');
   game._resize();
   game._render();
   await new Promise((r) => requestAnimationFrame(r));
@@ -740,12 +701,12 @@ async function boot() {
   game.start();
   setTimeout(() => {
     bootEl.classList.add('hidden');
-    setTimeout(() => bootEl.remove(), 600);
-  }, 260);
+    setTimeout(() => bootEl.remove(), 500);
+  }, 220);
 }
 
 boot().catch((err) => {
   console.error(err);
   const s = document.querySelector('.boot-status');
-  if (s) { s.textContent = 'failed to start: ' + err.message; s.style.color = '#ff6b8a'; }
+  if (s) { s.textContent = 'failed to start: ' + err.message; s.style.color = '#e0705a'; }
 });
