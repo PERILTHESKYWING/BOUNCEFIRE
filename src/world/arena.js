@@ -148,7 +148,7 @@ export class Arena {
     raw.push({ x: 0, z: totalZ + 2.6, w: W + 6, d: 2.4, h: KERB_H, rot: 0, baseY: lastY, boundary: true });
 
     this.bounds = { minX: -halfW, maxX: halfW, minZ: 0, maxZ: totalZ };
-    this._buildMeshes(raw, theme, totalZ, W);
+    this._buildMeshes(deoverlap(raw), theme, totalZ, W);
     this._buildGrid();
 
     // Nudge any spawn that landed inside geometry; a walled-in enemy would
@@ -232,13 +232,18 @@ export class Arena {
       trimGeometry(),
       new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
     );
-    cap.scale.set(w.w * 1.05, 0.28, w.d * 1.05);
-    cap.position.y = w.h - 0.1;
-    cap.material.color.setHex(mod.color).lerp(new THREE.Color(0xffffff), 0.55);
+    // Kept close to the panel's own colour. Painted white it read as a second
+    // slab balanced on top of the panel rather than as its edge, because from
+    // this camera the top face is as large as the front one.
+    cap.scale.set(w.w * 1.04, 0.2, w.d * 1.04);
+    cap.position.y = w.h - 0.08;
+    cap.material.color.setHex(mod.color).lerp(new THREE.Color(0xffffff), 0.22);
     g.add(cap);
 
-    // Crown plate is what the player reads from this camera; the face plates
-    // let them spot the panel from across the room.
+    // One mark, on the crown, which is the face this camera actually looks at.
+    // There used to be a second copy of it on the front and back of the panel;
+    // from overhead you saw both at once and the panel read as two objects
+    // stacked on each other rather than as one painted block.
     const tex = modifierTexture(mod);
     const plateMat = new THREE.MeshBasicMaterial({
       map: tex, transparent: true, toneMapped: true, depthWrite: false,
@@ -249,15 +254,6 @@ export class Arena {
     crown.rotation.z = Math.PI;
     crown.position.y = w.h + 0.16;
     g.add(crown);
-
-    const faceH = Math.min(w.h * 0.62, 1.7);
-    const faceGeo = new THREE.PlaneGeometry(faceH * 2, faceH);
-    for (const s of [1, -1]) {
-      const p = new THREE.Mesh(faceGeo, plateMat);
-      p.position.set(0, w.h * 0.5, s * (w.d / 2 + 0.05));
-      if (s < 0) p.rotation.y = Math.PI;
-      g.add(p);
-    }
 
     // A flat painted stripe on the floor, so the panel's reach is obvious.
     const decal = new THREE.Mesh(
@@ -309,13 +305,18 @@ export class Arena {
       this.group.add(m);
     }
 
-    // Step risers between rooms, in the wall colour so they read as built.
-    // They run the full width of the extended floor, not just the arena: the
-    // gap between two floor planes at different heights is a hole you can see
-    // the sky through, and it shows up as a black band across the screen.
+    // Step risers between rooms. They run the full width of the extended
+    // floor, not just the arena: the gap between two floor planes at different
+    // heights is a hole you can see the sky through.
+    //
+    // Painted in the cap colour, not the wall colour. A riser's face points
+    // straight back at the camera, and the key light comes from above and
+    // beyond it, so in the wall colour it lit to almost nothing and drew a
+    // black bar across the middle of the screen every time the player came
+    // within sight of a step.
     const riser = new THREE.InstancedMesh(
       trimGeometry(),
-      new THREE.MeshStandardMaterial({ color: theme.wall, roughness: 0.95 }),
+      new THREE.MeshStandardMaterial({ color: theme.wallTop, roughness: 0.92 }),
       Math.max(1, this.chambers.length)
     );
     riser.frustumCulled = false;
@@ -495,6 +496,61 @@ export class Arena {
 //   * bounce surfaces live at the edges and on the diagonals
 //   * spawn points sit away from walls, so nothing starts the fight stuck
 
+/**
+ * No two walls may occupy the same space.
+ *
+ * Generators place their features independently, so a long rail and a short
+ * screen can each be written without knowing about the other and end up
+ * interpenetrating. Two boxes sharing a volume z-fight along the seam and read
+ * as a rendering fault rather than as level geometry. Rather than ask every
+ * generator to do the bookkeeping, the builder pulls overlapping walls apart:
+ * the smaller of the pair is trimmed back along whichever axis it is least
+ * buried in, and dropped outright if that would leave nothing worth drawing.
+ */
+const MIN_WALL = 1.2;
+
+function deoverlap(raw) {
+  const kept = [];
+  const span = (w) => ({
+    x0: w.x - w.w / 2, x1: w.x + w.w / 2,
+    z0: w.z - w.d / 2, z1: w.z + w.d / 2,
+  });
+  for (const w of raw) {
+    // Rotated walls and the kerb are left alone: the kerb encloses everything
+    // by design, and an oriented box needs a separating-axis test that is not
+    // worth carrying for the handful of diagonals a room contains.
+    if (w.boundary || w.rot) { kept.push(w); continue; }
+    let drop = false;
+    for (const o of kept) {
+      if (o.boundary || o.rot) continue;
+      const a = span(w), b = span(o);
+      const ox = Math.min(a.x1, b.x1) - Math.max(a.x0, b.x0);
+      const oz = Math.min(a.z1, b.z1) - Math.max(a.z0, b.z0);
+      if (ox <= 0.001 || oz <= 0.001) continue;
+
+      // Trim whichever of the two is the lesser feature, so a rail survives a
+      // screen and never the other way round.
+      const victim = w.w * w.d <= o.w * o.d ? w : o;
+      const other = victim === w ? o : w;
+      const s = span(victim), t = span(other);
+      if (ox <= oz) {
+        if (victim.x < other.x) { const e = t.x0; victim.w = e - s.x0; victim.x = (s.x0 + e) / 2; }
+        else { const e = t.x1; victim.w = s.x1 - e; victim.x = (e + s.x1) / 2; }
+      } else if (victim.z < other.z) {
+        const e = t.z0; victim.d = e - s.z0; victim.z = (s.z0 + e) / 2;
+      } else {
+        const e = t.z1; victim.d = s.z1 - e; victim.z = (e + s.z1) / 2;
+      }
+      if (victim.w < MIN_WALL || victim.d < MIN_WALL) {
+        if (victim === w) { drop = true; break; }
+        o.dead = true;
+      }
+    }
+    if (!drop) kept.push(w);
+  }
+  return kept.filter((w) => !w.dead);
+}
+
 function W(out, x, z, w, d, rot = 0) {
   out.walls.push({ x, z, w, d, h: WALL_H, rot });
 }
@@ -621,33 +677,39 @@ const GENERATORS = {
   // shoot around before anything is shooting back.
   training(out, p) {
     // Hand-built, one feature per lesson, nothing in the way of anything else.
-    // Every x here is written against halfW so the room survives a change to
-    // the arena width; the first version of this was authored against a
-    // 42-wide arena and put half its walls outside a 24-wide one.
+    // Every x is written against halfW so the room survives a change to the
+    // arena width, and every feature is checked against the one before it so
+    // no two boxes ever share a volume.
     const { halfW, z0 } = p;
     const Z = (v) => z0 + v;
     const X = (f) => halfW * f;
 
-    // Rails down both sides, set in from the kerb. They are the bank surface
-    // for the whole room, and they are always within reach of the middle.
-    W(out, -X(0.75), Z(54), 2.2, 58, 0);
-    W(out,  X(0.75), Z(54), 2.2, 58, 0);
+    // Rails down both sides, flush against the kerb. Set in from the wall they
+    // left a corridor behind them that the player could walk into and vanish
+    // from the camera, which is the one thing this room must never do. Flush,
+    // they are simply the edge of the room, and the edge is the bank surface.
+    const rx = halfW - 1.1;
+    W(out, -rx, Z(56), 2.2, 68, 0);
+    W(out,  rx, Z(56), 2.2, 68, 0);
 
-    // Lesson 3: a screen in front of each target, so the obvious shot is the
-    // one that does not work.
-    W(out, -X(0.55), Z(47), halfW * 0.66, 2.0, 0);
-    W(out,  X(0.55), Z(47), halfW * 0.66, 2.0, 0);
+    // Lesson 2: two low blocks framing the firing lane. They stand well clear
+    // of the rails, so the targets behind them are never in cover.
+    W(out, -X(0.34), Z(45), 4.2, 1.8, 0);
+    W(out,  X(0.34), Z(45), 4.2, 1.8, 0);
 
-    // Lesson 4: a pocket for the shielded one, open at both flanks.
-    W(out, -X(0.46), Z(66), 2.0, 9, 0);
-    W(out,  X(0.46), Z(66), 2.0, 9, 0);
+    // Lesson 4: the shield pocket. Two backboards set at forty-five degrees
+    // beside the Warden. A round sent up either side of the room comes off a
+    // backboard square across its flank, which is the one angle its shield
+    // does not cover — and the aim line draws that shot for you.
+    W(out, -X(0.46), Z(67), 6.0, 1.4,  Math.PI / 4);
+    W(out,  X(0.46), Z(67), 6.0, 1.4, -Math.PI / 4);
 
     // Lesson 5: the panel, square on and unmissable.
-    SLOT(out, 0, Z(75), halfW * 0.7, 2.2, 0);
+    SLOT(out, 0, Z(77), halfW * 0.7, 2.2, 0);
 
     // Lesson 6: two posts to work around in the live fight.
-    W(out, -X(0.42), Z(86), 3.2, 3.2, 0.6);
-    W(out,  X(0.42), Z(86), 3.2, 3.2, -0.6);
+    W(out, -X(0.40), Z(88), 3.0, 3.0, 0.5);
+    W(out,  X(0.40), Z(88), 3.0, 3.0, -0.5);
 
     SP(out, 0, Z(50));
   },

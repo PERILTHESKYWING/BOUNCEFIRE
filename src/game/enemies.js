@@ -153,6 +153,8 @@ export class Enemies {
     e.activated = false; e.dying = 0; e.rallyT = 0;
     e.frozen = false;
     e.chamber = chamber;
+    e.tut = -1;
+    e.noTrack = false;
     this.aliveCount++;
     return e;
   }
@@ -309,7 +311,7 @@ export class Enemies {
       // the player (so a Warden's shield stays up and the lesson holds), and
       // never move or hurt anyone.
       if (e.frozen) {
-        e.face = angleDamp(e.face, Math.atan2(nx, nz), 6, dt);
+        if (!e.noTrack) e.face = angleDamp(e.face, Math.atan2(nx, nz), 6, dt);
         e.vx = 0; e.vz = 0;
         e.baseY = arena.floorAt(e.z);
         e.y = e.baseY + (def.hover || 0);
