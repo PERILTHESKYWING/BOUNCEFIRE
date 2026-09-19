@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../../vendor/three/three.module.js';
 import { CONFIG, BOSS_DEF } from '../core/config.js';
 import { clamp, TAU, damp } from '../core/utils.js';
 import { modelGeometry, shadowTexture } from '../world/geometry.js';

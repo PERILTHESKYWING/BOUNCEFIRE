@@ -8,13 +8,6 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@500;600;700&family=Barlow:wght@400;500;600&display=swap" rel="stylesheet" />
 <link rel="stylesheet" href="src/ui/ui.css" />
-<script type="importmap">
-{
-  "imports": {
-    "three": "./vendor/three/three.module.js"
-  }
-}
-</script>
 <div id="stage">
   <canvas id="gl"></canvas>
   <div id="vignette"></div>
@@ -29,4 +22,5 @@
   <div class="boot-bar"><i></i></div>
   <div class="boot-status">loading</div>
 </div>
+<script type="module" src="src/bootguard.js"></script>
 <script type="module" src="src/main.js"></script>

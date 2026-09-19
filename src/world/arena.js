@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../../vendor/three/three.module.js';
 import { THEMES } from '../data/themes.js';
 import { MODIFIERS } from '../data/modifiers.js';
 import { makeRng, clamp, lerp, TAU } from '../core/utils.js';

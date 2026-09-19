@@ -719,3 +719,5 @@ button { font-family: inherit; color: inherit; border: 0; background: none; curs
 @media (prefers-reduced-motion: reduce) {
   * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+.boot-status.boot-failed { color: var(--bad); max-width: 80vw; text-align: center; line-height: 1.35; }

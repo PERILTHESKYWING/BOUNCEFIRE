@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../../vendor/three/three.module.js';
 import { glowTexture } from '../world/geometry.js';
 import { Pool, clamp } from '../core/utils.js';
 

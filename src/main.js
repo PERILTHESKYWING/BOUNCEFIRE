@@ -1,4 +1,4 @@
-import * as THREE from 'three';
+import * as THREE from '../vendor/three/three.module.js';
 
 import { CONFIG, BOSS_DEF } from './core/config.js';
 import { detectQuality, clamp, damp, isTouch } from './core/utils.js';
